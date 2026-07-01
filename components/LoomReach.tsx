@@ -23,7 +23,7 @@ function decide(samples: number[], econ: Econ): Decision {
 }
 
 interface Holdout { samples: number[]; actual: number; }
-interface Compute { fc: ForecastResult; holdout: Holdout | null; }
+interface Compute { fc: ForecastResult; holdouts: Holdout[]; }
 
 function Sheet({ no, name, right, children }: { no: string; name: string; right?: string; children: React.ReactNode }) {
   return (
@@ -98,13 +98,14 @@ export default function LoomReach() {
     items.forEach((it) => {
       if (it.series.length < M + 2) return;
       const fc = runForecast(it.series, M, horizon, { drivers: it.drivers, seed: 7, nSamples: 5000 });
-      let holdout: Holdout | null = null;
-      if (it.series.length >= 2 * M + horizon) {
-        const train = it.series.slice(0, it.series.length - horizon);
+      const holdouts: Holdout[] = [];
+      const step = Math.max(3, Math.floor(horizon / 2));
+      for (let t = it.series.length - horizon; t >= 2 * M && holdouts.length < 5; t -= step) {
+        const train = it.series.slice(0, t);
         const hf = runForecast(train, M, horizon, { drivers: it.drivers, seed: 7, nSamples: 5000 });
-        holdout = { samples: hf.samples, actual: it.series.slice(it.series.length - horizon).reduce((a, b) => a + b, 0) };
+        holdouts.push({ samples: hf.samples, actual: it.series.slice(t, t + horizon).reduce((a, b) => a + b, 0) });
       }
-      map.set(it.id, { fc, holdout });
+      map.set(it.id, { fc, holdouts });
     });
     return map;
   }, [items, horizon]);
@@ -128,10 +129,13 @@ export default function LoomReach() {
   const portfolio = useMemo(() => {
     let totNV = 0, totMean = 0, wins = 0, n = 0;
     items.forEach((it) => {
-      const cm = compute.get(it.id); if (!cm?.holdout) return;
-      const bt = scoreHoldout(it, cm.holdout, econFor(it));
-      totNV += bt.scored.newsvendor.total; totMean += bt.scored.makeToMean.total;
-      if (bt.scored.newsvendor.total <= bt.scored.makeToMean.total) wins++; n++;
+      const cm = compute.get(it.id); if (!cm) return;
+      const nv = newsvendor(econFor(it));
+      cm.holdouts.forEach((h) => {
+        const cNV = realizedCost(Math.round(quantile(h.samples, nv.criticalRatio)), h.actual, nv.Cu, nv.Co).total;
+        const cM = realizedCost(Math.round(avg(h.samples)), h.actual, nv.Cu, nv.Co).total;
+        totNV += cNV; totMean += cM; if (cNV <= cM) wins++; n++;
+      });
     });
     return { totNV, totMean, wins, n, savedVsMean: totMean - totNV };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -184,10 +188,10 @@ export default function LoomReach() {
 
         {showRoll && (
           <div className="summary">
-            <div className="strip"><span>Portfolio backtest — held-out season</span><span className="r">{portfolio.wins}/{portfolio.n} SKUs improved</span></div>
+            <div className="strip"><span>Portfolio backtest — rolling held-out seasons</span><span className="r">{portfolio.wins}/{portfolio.n} improved</span></div>
             <div className="body">
               <span className="big">{money(portfolio.savedVsMean)}</span>
-              <span className="txt">saved vs. make-to-forecast across <b>{portfolio.n}</b> SKU{portfolio.n > 1 ? "s" : ""}. Newsvendor wins at portfolio scale, not on every single SKU — it minimizes <b>expected</b> cost.</span>
+              <span className="txt">saved vs. make-to-forecast across <b>{portfolio.n}</b> held-out season{portfolio.n > 1 ? "s" : ""} ({items.length} SKUs × rolling origins). Newsvendor wins at portfolio scale, not on every one — it minimizes <b>expected</b> cost.</span>
             </div>
           </div>
         )}
@@ -378,8 +382,9 @@ function CostCurveChart({ samples, plan }: { samples: number[]; plan: Decision }
 }
 
 function BacktestSheet({ it, cm, econ, horizon, score }: { it: SkuItem; cm: Compute; econ: Econ; horizon: number; score: (it: SkuItem, h: Holdout, econ: Econ) => { actual: number; scored: Record<string, ReturnType<typeof realizedCost>> }; }) {
-  if (!cm.holdout) return <Sheet no="07" name="Backtest"><p className="ph">Needs ≥ {2 * M + horizon} months (two seasons to learn + one to hold out). This has {it.series.length}.</p></Sheet>;
-  const bt = score(it, cm.holdout, econ);
+  const holdout = cm.holdouts[0];
+  if (!holdout) return <Sheet no="07" name="Backtest"><p className="ph">Needs ≥ {2 * M + horizon} months (two seasons to learn + one to hold out). This has {it.series.length}.</p></Sheet>;
+  const bt = score(it, holdout, econ);
   const rows: [string, string][] = [["newsvendor", "Loom Reach"], ["makeToMean", "Make-to-forecast"], ["lastSeasonPlus10", "Last season +10%"], ["runRate", "Recent run-rate"]];
   const maxCost = Math.max(...rows.map(([k]) => bt.scored[k].total)) || 1;
   const nvWon = bt.scored.newsvendor.total <= bt.scored.makeToMean.total;
