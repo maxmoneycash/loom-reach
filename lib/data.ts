@@ -1,8 +1,9 @@
 import { makeRng, type Econ } from "./engine";
+import type { Drivers } from "./forecast";
 
 export interface SkuItem {
   id: string; nm: string; cat: string; labels: string[]; series: number[];
-  econ: Econ; real: boolean; src: string;
+  econ: Econ; real: boolean; src: string; drivers?: Drivers;
 }
 
 /* ---- REAL public demand series (fetched verbatim; classic published datasets) ---- */
@@ -33,17 +34,27 @@ export function monthsFrom(start: string, n: number): string[] {
   return out;
 }
 
-/* ---- ILLUSTRATIVE apparel catalog: deterministic seeded sample, clearly labeled. NOT real sales. ---- */
-function genSeries(seed: number, n: number, base: number, trendPerYr: number, shape: number[], noise: number, intermittent: number): number[] {
+/* ---- ILLUSTRATIVE apparel catalog: deterministic seeded sample, clearly labeled. NOT real sales.
+   Demand is shaped by real drivers (year-varying promo calendar + price/markdowns) so the
+   driver-regression model has genuine signal to find. ---- */
+interface Gen { series: number[]; price: number[]; promo: number[]; }
+function genSku(seed: number, n: number, base: number, trendPerYr: number, shape: number[], noise: number,
+  opts: { priceBase: number; promoLift?: number; elasticity?: number; intermittent?: boolean }): Gen {
   const rng = makeRng(seed);
-  const out: number[] = [];
+  const promoLift = opts.promoLift ?? 0.5, elasticity = opts.elasticity ?? 1.1;
+  const promoSet = new Set<number>();
+  for (let y = 0; y < Math.ceil(n / 12); y++) for (let c = 0; c < 2; c++) promoSet.add(y * 12 + Math.floor(rng() * 12)); // ~2 promos/yr, year-varying
+  const series: number[] = [], price: number[] = [], promo: number[] = [];
   for (let i = 0; i < n; i++) {
-    const mo = i % 12; const s = shape[mo]; const tr = 1 + trendPerYr * (i / 12);
-    let v = base * s * tr * (1 + (rng() - 0.5) * noise);
-    if (intermittent && rng() < intermittent) v *= rng() * 0.3;
-    out.push(Math.max(0, Math.round(v)));
+    const mo = i % 12, s = shape[mo], tr = 1 + trendPerYr * (i / 12);
+    const pr = mo === 7 ? opts.priceBase * 0.75 : opts.priceBase; // mid-year clearance markdown
+    price.push(Math.round(pr));
+    const isP = promoSet.has(i) ? 1 : 0; promo.push(isP);
+    let v = base * s * tr * (1 + (rng() - 0.5) * noise) * (1 + promoLift * isP) * Math.pow(opts.priceBase / pr, elasticity);
+    if (opts.intermittent && rng() > 0.28) v = 0; // sparse, lumpy demand (defense contract cadence)
+    series.push(Math.max(0, Math.round(v)));
   }
-  return out;
+  return { series, price, promo };
 }
 const SHAPES = {
   winter: [1.55, 1.25, 0.8, 0.55, 0.4, 0.35, 0.4, 0.55, 0.95, 1.35, 1.7, 1.85],
@@ -53,16 +64,20 @@ const SHAPES = {
 };
 const N_MO = 48, START = "2021-01";
 const APPAREL = [
-  { id: "AN-FJ", nm: "Heritage Field Jacket", cat: "Outerwear · seasonal", price: 240, unitCost: 96, salvage: 30, series: genSeries(11, N_MO, 420, 0.18, SHAPES.winter, 0.18, 0) },
-  { id: "AN-TEE", nm: "Everyday Organic Tee", cat: "Core basic · high volume", price: 38, unitCost: 14, salvage: 4, series: genSeries(22, N_MO, 2600, 0.05, SHAPES.steady, 0.12, 0) },
-  { id: "AN-ML", nm: "Merino Base Layer", cat: "Performance · winter", price: 130, unitCost: 52, salvage: 16, series: genSeries(33, N_MO, 640, 0.1, SHAPES.winter, 0.2, 0) },
-  { id: "AN-LIN", nm: "Linen Camp Shirt", cat: "Seasonal · summer", price: 88, unitCost: 33, salvage: 10, series: genSeries(44, N_MO, 780, 0.06, SHAPES.summer, 0.19, 0) },
-  { id: "AN-SS", nm: "Tactical Softshell", cat: "Defense contract · lumpy", price: 320, unitCost: 140, salvage: 40, series: genSeries(55, N_MO, 300, 0.12, SHAPES.steady, 0.25, 0.22) },
-  { id: "AN-HD", nm: "Limited-Run Hoodie", cat: "Trend · volatile", price: 96, unitCost: 36, salvage: 8, series: genSeries(66, N_MO, 900, -0.1, SHAPES.holiday, 0.3, 0) },
+  { id: "AN-FJ", nm: "Heritage Field Jacket", cat: "Outerwear · seasonal", price: 240, unitCost: 96, salvage: 30, g: genSku(11, N_MO, 420, 0.18, SHAPES.winter, 0.16, { priceBase: 240, promoLift: 0.5, elasticity: 1.2 }) },
+  { id: "AN-TEE", nm: "Everyday Organic Tee", cat: "Core basic · promo-driven", price: 38, unitCost: 14, salvage: 4, g: genSku(22, N_MO, 2600, 0.05, SHAPES.steady, 0.1, { priceBase: 38, promoLift: 0.8, elasticity: 1.6 }) },
+  { id: "AN-ML", nm: "Merino Base Layer", cat: "Performance · winter", price: 130, unitCost: 52, salvage: 16, g: genSku(33, N_MO, 640, 0.1, SHAPES.winter, 0.18, { priceBase: 130, promoLift: 0.4, elasticity: 1.0 }) },
+  { id: "AN-LIN", nm: "Linen Camp Shirt", cat: "Seasonal · summer", price: 88, unitCost: 33, salvage: 10, g: genSku(44, N_MO, 780, 0.06, SHAPES.summer, 0.17, { priceBase: 88, promoLift: 0.45, elasticity: 1.3 }) },
+  { id: "AN-SS", nm: "Tactical Softshell", cat: "Defense contract · lumpy", price: 320, unitCost: 140, salvage: 40, g: genSku(55, N_MO, 1100, 0.12, SHAPES.steady, 0.2, { priceBase: 320, intermittent: true }) },
+  { id: "AN-HD", nm: "Limited-Run Hoodie", cat: "Trend · volatile", price: 96, unitCost: 36, salvage: 8, g: genSku(66, N_MO, 900, -0.1, SHAPES.holiday, 0.28, { priceBase: 96, promoLift: 0.7, elasticity: 1.4 }) },
 ];
 
 export function loadApparel(): SkuItem[] {
-  return APPAREL.map((a) => ({ id: a.id, nm: a.nm, cat: a.cat, labels: monthsFrom(START, N_MO), series: a.series, econ: { price: a.price, unitCost: a.unitCost, salvage: a.salvage }, real: false, src: "Illustrative sample data" }));
+  return APPAREL.map((a) => ({
+    id: a.id, nm: a.nm, cat: a.cat, labels: monthsFrom(START, N_MO), series: a.g.series,
+    econ: { price: a.price, unitCost: a.unitCost, salvage: a.salvage }, real: false, src: "Illustrative sample data",
+    drivers: { price: a.g.price, promo: a.g.promo },
+  }));
 }
 export function loadReal(): SkuItem[] {
   return Object.keys(REAL).map((k) => { const d = REAL[k]; return { id: k, nm: d.name, cat: d.cite, labels: monthsFrom(d.start, d.vals.length), series: d.vals.slice(), econ: { ...REAL_ECON[k] }, real: true, src: "Real public dataset" }; });
