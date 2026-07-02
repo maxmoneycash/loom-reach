@@ -405,3 +405,15 @@ details.meth ul{margin:8px 0;padding-left:18px} details.meth li{margin:5px 0}
   *{animation:none!important;transition:none!important}
   .fpath{stroke-dashoffset:0}
 }
+
+/* print = a clean cut ticket / order sheet */
+@media print{
+  .bar,.tabbar,.actions,.warn,.intro p,.skuchips,.slider,.qrow .snap{display:none!important}
+  body{background:#fff!important}
+  .app > main{padding-bottom:0}
+  .sheet,.summary{border-color:#000;break-inside:avoid;box-shadow:none}
+  .sheet::before,.sheet::after{display:none}
+  .plan td,.plan th{color:#000!important}
+  .plan td.q{color:#000!important;font-weight:700}
+  a[href]::after{content:""}
+}
