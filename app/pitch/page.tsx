@@ -14,6 +14,7 @@ const rows: [string, string, string][] = [
   ["01 / 06 · Decision + Risk", "Loom OS — demand-driven manufacturing", "The newsvendor cut quantity, and a draggable explorer showing exactly what any other quantity costs."],
   ["08 · Size run", "Loom OS — production orchestration", "The cut split into a factory-ready size curve, integer-exact."],
   ["/api/ingest", "Loom — supply-chain integrations", "Server-side ingestion of a Shopify orders export → per-SKU monthly demand. The same handler sits behind Shopify OAuth in production."],
+  ["09 · Quick response", "Anatar's core thesis", "Simulates cut → read sell-through → re-cut vs. a single offshore commit, with hit-or-miss uncertainty estimated from the SKU's own history. Puts a dollar value on weeks-not-months lead times — the number that justifies domestic manufacturing."],
 ];
 
 export default function Pitch() {

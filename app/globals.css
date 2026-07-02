@@ -254,6 +254,20 @@ svg.chart{display:block;width:100%;height:auto;overflow:visible;margin-top:4px}
   font-family:var(--mono);font-size:11.5px;color:var(--muted)}
 .sizefoot b{font-family:var(--grotesk);font-size:14px;color:var(--ink)}
 
+/* ---------- quick response ---------- */
+.qrhead{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin:4px 0 4px}
+.qrhead .big{font-family:var(--grotesk);font-weight:700;font-size:clamp(30px,8vw,44px);letter-spacing:-.02em;color:var(--good)}
+.qrhead .big.neg{color:var(--red)}
+.qrhead .sub{font-size:12px;color:var(--muted);max-width:46ch;line-height:1.5}
+.qrctl{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:12px 0 4px}
+@media (max-width:520px){.qrctl{grid-template-columns:1fr}}
+.qrctl .f label{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:2px}
+.qrctl .f label b{color:var(--signal-ink);letter-spacing:0}
+.stagebar{display:flex;height:26px;border-radius:5px;overflow:hidden;border:1px solid var(--line);margin-top:10px}
+.stagebar>i{display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:9px;color:#fff;white-space:nowrap;overflow:hidden;min-width:0}
+.stagebar .s1{background:var(--ink)} .stagebar .sread{background:var(--blue)} .stagebar .s2{background:var(--signal)}
+.stagecap{display:flex;justify-content:space-between;font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:5px}
+
 /* ---------- production plan table + actions ---------- */
 .btn{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11.5px;padding:10px 14px;min-height:44px;
   border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);transition:border-color .15s,background .15s}

@@ -6,6 +6,7 @@ import { newsvendor, quantile, avg, expectedCost, realizedCost, riskAt, allocate
 import { runForecast, type ForecastResult } from "@/lib/forecast";
 import { loadApparel, loadReal, parseCSV, type SkuItem } from "@/lib/data";
 import { loadState, saveState, clearState } from "@/lib/persist";
+import { simulateQR, levelRatios } from "@/lib/quickresponse";
 
 const M = 12;
 type Source = "apparel" | "real" | "upload";
@@ -327,6 +328,7 @@ export default function LoomReach() {
             <RiskSheet key={"risk-" + it.id + ":" + horizon} samples={cm.fc.samples} plan={decide(cm.fc.samples, econFor(it))} />
             <SizeSheet it={it} Qstar={decide(cm.fc.samples, econFor(it)).Qstar}
               weights={sizes[it.id]} onWeights={(w) => setSizes((p) => ({ ...p, [it.id]: w }))} />
+            {horizon >= 3 && <QRSheet key={"qr-" + it.id + ":" + horizon} it={it} fc={cm.fc} econ={econFor(it)} />}
             <BacktestSheet it={it} cm={cm} econ={econFor(it)} horizon={horizon} score={scoreHoldout} />
             <Methodology />
           </div>
@@ -702,6 +704,81 @@ function SizeSheet({ it, Qstar, weights, onWeights }: { it: SkuItem; Qstar: numb
       </div>
       <div className="sizefoot"><span>allocation check</span><span><b>{fmt(units.reduce((a, b) => a + b, 0))}</b> / {fmt(Qstar)} u</span></div>
       <div className="actions"><button className="btn" onClick={() => onWeights(DEFAULT_SIZE_W)}><RotateCcw size={13} /> Standard curve</button></div>
+    </Sheet>
+  );
+}
+
+/* Quick response — the dollar value of a fast second cut (why short lead times win) */
+function QRSheet({ it, fc, econ }: { it: SkuItem; fc: ForecastResult; econ: Econ }) {
+  const H = fc.point.length;
+  const [k, setK] = useState(2);
+  const [prem, setPrem] = useState(12);
+  const ratios = useMemo(() => levelRatios(it.series, M), [it]);
+  const qr = useMemo(
+    () => simulateQR(fc.point, fc.resid, ratios, econ, { k, premium: prem / 100, seed: 5 }),
+    [fc, ratios, econ, k, prem]
+  );
+  const kMax = Math.min(4, H - 1);
+  const pos = qr.savings > 0;
+  const readPct = (k / H) * 100;
+  return (
+    <Sheet no="09" name="Quick response" right="why short lead times win">
+      <p className="ph">
+        The bet behind domestic manufacturing: commit a lean first cut, watch the first {k} month{k > 1 ? "s" : ""} of real
+        sales, then re-cut at short lead time once you know if it&apos;s a hit. This simulates both strategies over 1,200
+        seasons whose hit-or-miss factor is estimated from this SKU&apos;s own {qr.lambdaN} observed year{qr.lambdaN > 1 ? "s" : ""}.
+      </p>
+      <div className="qrhead">
+        <span className={"big" + (pos ? "" : " neg")}>{pos ? money(qr.savings) + " saved" : money(qr.savings)}</span>
+        <span className="sub">
+          {pos
+            ? <>per season vs. a single offshore-style commit — a <b>{(qr.savingsPct * 100).toFixed(0)}%</b> lower expected cost, because {k} month{k > 1 ? "s" : ""} of reads shrink remaining-season uncertainty by <b>{(qr.tightenPct * 100).toFixed(0)}%</b>.</>
+            : <>at this rush premium the second cut doesn&apos;t pay for this SKU — a single commit is fine. Honest answer.</>}
+        </span>
+      </div>
+      <div className="stagebar" aria-hidden="true">
+        <i className="s1" style={{ width: "34%" }}>cut {fmt(qr.Q1)} u now</i>
+        <i className="sread" style={{ width: readPct + "%" }}>read {k}mo</i>
+        <i className="s2" style={{ flex: 1 }}>re-cut ~{fmt(qr.avgQ2)} u fast</i>
+      </div>
+      <div className="stagecap"><span>lean commit</span><span>learn from sell-through</span><span>respond at +{prem}% cost</span></div>
+      <div className="btbars" style={{ marginTop: 14 }}>
+        {[
+          { lab: "Single commit (long lead)", cost: qr.costSingle, q: qr.Qfull, best: !pos },
+          { lab: "Cut → read → re-cut", cost: qr.costQR, q: qr.Q1, q2: qr.avgQ2, best: pos },
+        ].map((s) => {
+          const maxC = Math.max(qr.costSingle, qr.costQR) || 1;
+          return (
+            <div key={s.lab} className={"btbar" + (s.best ? " best" : "")}>
+              <div className="nm">{s.best ? <b>{s.lab}</b> : s.lab}<br />
+                <span className="mono" style={{ fontSize: 9.5, color: "var(--faint)" }}>
+                  {"q2" in s && s.q2 != null ? `${fmt(s.q)} + ~${fmt(s.q2)} u` : `${fmt(s.q)} u`}
+                </span></div>
+              <div className="track"><i className={s.best ? "" : "neutral"} style={{ width: ((s.cost / maxC) * 100).toFixed(0) + "%" }} /></div>
+              <div className="cost">{money(s.cost)}</div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="qrctl">
+        <div className="f">
+          <label htmlFor="qr-k">Months of reads before re-cut <b>{k} mo</b></label>
+          <input id="qr-k" className="slider" type="range" min={1} max={kMax} step={1} value={k}
+            style={{ ["--fill" as string]: (((k - 1) / Math.max(1, kMax - 1)) * 100).toFixed(0) + "%" } as CSSProperties}
+            onChange={(e) => setK(parseInt(e.target.value) || 2)} />
+        </div>
+        <div className="f">
+          <label htmlFor="qr-prem">Rush premium on the 2nd cut <b>+{prem}%</b></label>
+          <input id="qr-prem" className="slider" type="range" min={0} max={40} step={1} value={prem}
+            style={{ ["--fill" as string]: ((prem / 40) * 100).toFixed(0) + "%" } as CSSProperties}
+            onChange={(e) => setPrem(parseInt(e.target.value) || 0)} />
+        </div>
+      </div>
+      <div className="mt">
+        This is the economics of &quot;weeks-not-months&quot; lead times: reads are only worth money because demand has a persistent
+        hit-or-miss component — estimated here from realized year-over-year deviations{qr.lambdaN < 3 ? " (few observed years: treat as indicative)" : ""}.
+        Offshore lead times can&apos;t use the reads; a fast factory can.
+      </div>
     </Sheet>
   );
 }

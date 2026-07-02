@@ -140,6 +140,35 @@ const sres = ordersToSkus(sample);
 ok("shopify: bundled sample ingests (2 SKUs, 36 months)", sres.items.length === 2 && sres.items.every((i) => i.series.length === 36),
    sres.items.map((i) => i.id + ":" + i.series.length).join(" "));
 
+/* ---- 12. quick response (accurate response / second cut) ---- */
+import { simulateQR, levelRatios } from "../lib/quickresponse";
+const qrEcon = { price: 100, unitCost: 40, salvage: 12 };
+const qrFc = Array(12).fill(100);                       // flat 100/mo forecast
+const qrRng = makeRng(31);
+const qrResid: number[] = Array.from({ length: 200 }, () => (qrRng() - 0.5) * 30);
+const hitOrMiss = [0.55, 0.8, 1.0, 1.25, 1.5];          // strong persistent level uncertainty
+
+const qr = simulateQR(qrFc, qrResid, hitOrMiss, qrEcon, { k: 2, premium: 0.12, seed: 5 });
+ok("qr: reads tighten the remaining forecast (>25%)", qr.tightenPct > 0.25, (qr.tightenPct * 100).toFixed(0) + "%");
+ok("qr: quick response saves money under hit-or-miss demand", qr.savings > 0, "$" + Math.round(qr.savings) + " (" + (qr.savingsPct * 100).toFixed(0) + "%)");
+ok("qr: first cut is leaner than single commit", qr.Q1 < qr.Qfull, qr.Q1 + " < " + qr.Qfull);
+ok("qr: second cut actually happens on average", qr.avgQ2 > 0, String(qr.avgQ2));
+
+const qrNoLevel = simulateQR(qrFc, qrResid, [1], qrEcon, { k: 2, premium: 0.12, seed: 5 });
+ok("qr: without level uncertainty, reads teach ~nothing (<10% tighten)", qrNoLevel.tightenPct < 0.10, (qrNoLevel.tightenPct * 100).toFixed(0) + "%");
+ok("qr: savings mostly vanish without level uncertainty", qrNoLevel.savings < qr.savings * 0.5, "$" + Math.round(qrNoLevel.savings) + " vs $" + Math.round(qr.savings));
+
+const qrHiPrem = simulateQR(qrFc, qrResid, hitOrMiss, qrEcon, { k: 2, premium: 0.60, seed: 5 });
+ok("qr: higher rush premium erodes the advantage", qrHiPrem.savings < qr.savings, "$" + Math.round(qrHiPrem.savings) + " < $" + Math.round(qr.savings));
+
+// on a real catalog SKU end-to-end (winning model's forecast + its own level history)
+const fjIt = loadApparel()[0];
+const fjFc = runForecast(fjIt.series, M, 12, { drivers: fjIt.drivers, seed: 7 });
+const fjRatios = levelRatios(fjIt.series, M);
+const fjQR = simulateQR(fjFc.point, fjFc.resid, fjRatios, { price: 240, unitCost: 96, salvage: 30 }, { k: 2, premium: 0.12, seed: 5 });
+ok("qr: runs end-to-end on catalog SKU with estimated level ratios", isFinite(fjQR.savings) && fjQR.lambdaN >= 2,
+   "λn=" + fjQR.lambdaN + " savings=$" + Math.round(fjQR.savings) + " tighten=" + (fjQR.tightenPct * 100).toFixed(0) + "%");
+
 console.log("\n--- champagne leaderboard (by MASE) ---");
 rc.candidates.forEach((c) => console.log(`  ${c.key.padEnd(8)} MASE ${c.mase.toFixed(3)}  WAPE ${(c.wape * 100).toFixed(1)}%  bias ${(c.bias * 100).toFixed(1)}%`));
 console.log(`selected: ${rc.selectedLabel} · skill vs naive ${(rc.skillVsNaive * 100).toFixed(1)}% · class ${rc.classification.label}`);
