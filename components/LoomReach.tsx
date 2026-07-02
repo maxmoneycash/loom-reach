@@ -8,7 +8,7 @@ import {
   Upload, TriangleAlert, Download, RotateCcw, ChevronLeft,
   ClipboardList, Database, BookOpen, Layers, ShoppingBag, ArrowUpRight,
 } from "lucide-react";
-import { newsvendor, quantile, avg, expectedCost, realizedCost, riskAt, allocateSizes, type Econ } from "@/lib/engine";
+import { newsvendor, quantile, avg, expectedCost, realizedCost, riskAt, allocateSizes, makeRng, type Econ } from "@/lib/engine";
 import { runForecast, type ForecastResult } from "@/lib/forecast";
 import { loadApparel, loadReal, parseCSV, type SkuItem } from "@/lib/data";
 import { loadState, saveState, clearState } from "@/lib/persist";
@@ -214,67 +214,115 @@ const CLASS_BLURB: Record<string, string> = {
   new: "short history — limited model choice until more data accrues.",
 };
 
+/* the critical ratio as a real instrument dial */
+function RatioGauge({ cr }: { cr: number }) {
+  const rm = useReducedMotion();
+  const angle = -90 + cr * 180;
+  const arc = (a0: number, a1: number, r: number) => {
+    const p = (a: number) => [100 + r * Math.cos(((a - 90) * Math.PI) / 180), 104 + r * Math.sin(((a - 90) * Math.PI) / 180)];
+    const [x0, y0] = p(a0), [x1, y1] = p(a1);
+    return `M ${x0.toFixed(1)} ${y0.toFixed(1)} A ${r} ${r} 0 ${a1 - a0 > 180 ? 1 : 0} 1 ${x1.toFixed(1)} ${y1.toFixed(1)}`;
+  };
+  return (
+    <div className="gaugewrap">
+      <svg width="200" height="118" viewBox="0 0 200 118" role="img" aria-label={`Urgency dial at ${(cr * 100).toFixed(0)} percent toward avoiding stockouts`}>
+        <path d={arc(-90, 90, 74)} fill="none" stroke="var(--line)" strokeWidth={13} strokeLinecap="round" />
+        <path d={arc(-90, -90 + cr * 180, 74)} fill="none" stroke="url(#gg)" strokeWidth={13} strokeLinecap="round" />
+        <defs><linearGradient id="gg" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stopColor="var(--blue)" /><stop offset="100%" stopColor="var(--signal)" />
+        </linearGradient></defs>
+        {[0, 0.25, 0.5, 0.75, 1].map((t) => {
+          const a = ((-90 + t * 180 - 90) * Math.PI) / 180;
+          return <line key={t} x1={100 + 60 * Math.cos(a)} y1={104 + 60 * Math.sin(a)} x2={100 + 66 * Math.cos(a)} y2={104 + 66 * Math.sin(a)} stroke="var(--faint)" strokeWidth={t === 0.5 ? 2 : 1} />;
+        })}
+        <motion.g initial={rm ? false : { rotate: -90 }} animate={{ rotate: angle }}
+          transition={rm ? { duration: 0 } : { type: "spring", stiffness: 60, damping: 12 }}
+          style={{ originX: "100px", originY: "104px" }}>
+          <line x1={100} y1={104} x2={100} y2={48} stroke="var(--ink)" strokeWidth={3} strokeLinecap="round" />
+          <circle cx={100} cy={104} r={7} fill="var(--ink)" />
+          <circle cx={100} cy={104} r={2.6} fill="var(--surface)" />
+        </motion.g>
+        <text x={22} y={114} fontSize={8.5} fill="var(--faint)" fontFamily="var(--mono)">CUT LESS</text>
+        <text x={178} y={114} fontSize={8.5} fill="var(--signal-ink)" fontFamily="var(--mono)" textAnchor="end">CUT MORE</text>
+      </svg>
+      <span className="gauge-cap">how much the math leans toward extra units</span>
+    </div>
+  );
+}
+
 function DecisionSheet({ it, plan, horizon, samples }: { it: SkuItem; plan: Decision; horizon: number; samples: number[] }) {
   const nv = plan.nv, save = plan.expectedCostMean - plan.expectedCostStar, buffer = plan.Qstar - plan.QtoMean;
   const risk = riskAt(plan.Qstar, samples, nv.Cu, nv.Co);
+  const ratio = nv.Co > 0 ? nv.Cu / nv.Co : Infinity;
   return (
-    <Sheet no="01" name="Decision" right={it.nm}>
+    <Sheet no="01" name="How many to cut" right={it.nm}>
       <div className="hero">
         <div className="cut">
-          <div className="lab">Cut for next {horizon}-mo season · newsvendor optimum</div>
+          <div className="lab">for the next {horizon}-month season</div>
           <div className="num"><NumberFlow value={plan.Qstar} format={INT} /> <small>units</small></div>
-          <div className="dim"><span>mean {fmt(plan.QtoMean)}</span><span className="seg2" /><span style={{ color: "var(--signal-ink)" }}>{buffer >= 0 ? "+" : ""}{fmt(buffer)} buffer</span></div>
+          <p className="answer">
+            That&apos;s the typical forecast <b>plus {fmt(Math.abs(buffer))} {buffer >= 0 ? "extra" : "fewer"}</b> — because for this product,
+            a missed sale hurts <b>{isFinite(ratio) ? ratio.toFixed(1) + "×" : "far"} more</b> than an unsold unit.
+            Planned this way, you&apos;d fully serve <span className="good">{Math.round(risk.fillRate * 1000) / 10}%</span> of likely demand
+            and save <span className="good">~{money(save)}</span> vs. just making the forecast.
+          </p>
           <div className="chips">
-            <div className="chip fill"><div className="cv">{(risk.fillRate * 100).toFixed(1)}%</div><div className="ck">fill rate</div></div>
-            <div className="chip risk"><div className="cv">{(risk.pStockout * 100).toFixed(0)}%</div><div className="ck">stockout risk</div></div>
-            <div className="chip left"><div className="cv">{fmt(risk.expLeftover)}</div><div className="ck">exp. leftover u</div></div>
-          </div>
-          <div className="cmp">
-            <div className="row"><span className="k">Make-to-forecast (mean)</span><span className="v">{fmt(plan.QtoMean)} u</span></div>
-            <div className="row"><span className="k">Expected cost saved vs mean</span><span className="v" style={{ color: "var(--good)" }}>{money(save)}</span></div>
+            <div className="chip fill"><div className="cv">{(risk.fillRate * 100).toFixed(1)}%</div><div className="ck">demand served</div></div>
+            <div className="chip risk"><div className="cv">{(risk.pStockout * 100).toFixed(0)}%</div><div className="ck">chance you sell out</div></div>
+            <div className="chip left"><div className="cv">{fmt(risk.expLeftover)}</div><div className="ck">typical leftover</div></div>
           </div>
         </div>
-        <div className="gauge">
-          <div className="lab">Critical ratio · Cu / (Cu+Co)</div>
-          <div className="crbar"><div className="pin" style={{ left: (nv.criticalRatio * 100).toFixed(1) + "%" }} /></div>
-          <div className="crrow"><span>overstock-averse</span><span className="mono" style={{ color: "var(--ink)", fontWeight: 600 }}>{(nv.criticalRatio * 100).toFixed(1)}%</span><span>stockout-averse</span></div>
-          <div className="cuco">
-            <div><div className="k">Cu · lost margin/u</div><div className="v">${fmt(nv.Cu)}</div></div>
-            <div><div className="k">Co · overstock/u</div><div className="v">${fmt(nv.Co)}</div></div>
-          </div>
-          <div className="mt">Stockouts cost {nv.Co > 0 ? (nv.Cu / nv.Co).toFixed(1) : "∞"}× an overstock here, so the optimal plan {plan.Qstar >= plan.QtoMean ? "builds a buffer above" : "trims below"} the mean forecast.</div>
-        </div>
+        <RatioGauge cr={nv.criticalRatio} />
       </div>
+      <details className="how">
+        <summary>How this number is computed</summary>
+        <div className="howbody">
+          This is the <b>newsvendor optimum</b>: Q* = F⁻¹(Cu / (Cu + Co)), where <b>Cu = ${fmt(nv.Cu)}</b> is the margin lost
+          per missed sale (price − cost) and <b>Co = ${fmt(nv.Co)}</b> is the loss per unsold unit (cost − salvage).
+          The dial shows the critical ratio {(nv.criticalRatio * 100).toFixed(1)}% — the service level worth paying for.
+          F is the demand distribution from the winning forecast model (5,000 simulated outcomes).
+        </div>
+      </details>
     </Sheet>
   );
 }
 
 function BrainSheet({ fc }: { fc: ForecastResult }) {
   const c = fc.classification, skillGood = fc.skillVsNaive > 0.001;
+  const missPct = isFinite(fc.accuracy.wape) ? (fc.accuracy.wape * 100).toFixed(0) : null;
   return (
-    <Sheet no="03" name="Model competition" right="cross-validated">
-      <p className="ph">Five methods compete; the winner is chosen per-SKU by rolling-origin cross-validation, measured against a seasonal-naive benchmark.</p>
-      <div className="metrics">
-        <div className="metric"><div className={"v " + (skillGood ? "good" : "amber")}>{skillGood ? pct(fc.skillVsNaive) : "≈ naive"}</div><div className="k">vs seasonal-naive</div></div>
-        <div className="metric"><div className="v sig">{isFinite(fc.accuracy.mase) ? fc.accuracy.mase.toFixed(2) : "—"}</div><div className="k">MASE</div></div>
-        <div className="metric"><div className="v sig">{isFinite(fc.accuracy.wape) ? (fc.accuracy.wape * 100).toFixed(1) + "%" : "—"}</div><div className="k">WAPE</div></div>
-        <div className="metric"><div className="v sig">{isFinite(fc.accuracy.bias) ? pct(fc.accuracy.bias) : "—"}</div><div className="k">bias</div></div>
-        <div className="metric"><span className={"pill " + c.label}>{c.label}{isFinite(c.adi) ? ` · ADI ${c.adi.toFixed(1)}` : ""}</span></div>
-      </div>
-      <table className="lead">
-        <thead><tr><th>Model</th><th>MASE</th><th>WAPE</th><th>Bias</th></tr></thead>
-        <tbody>
-          {fc.candidates.map((cd) => (
-            <tr key={cd.key} className={cd.key === fc.selectedKey ? "sel" : ""}>
-              <td>{cd.label}{cd.key === fc.selectedKey && <span className="win">chosen</span>}</td>
-              <td>{isFinite(cd.mase) ? cd.mase.toFixed(3) : "—"}</td>
-              <td>{isFinite(cd.wape) ? (cd.wape * 100).toFixed(1) + "%" : "—"}</td>
-              <td>{isFinite(cd.bias) ? pct(cd.bias) : "—"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <div className="mt">Pattern: <b>{c.label}</b> — {CLASS_BLURB[c.label]}</div>
+    <Sheet no="03" name="How good is the forecast" right="tested on the past">
+      <p className="answer">
+        Five different forecasting methods competed on this product&apos;s own history. The winner — <b>{fc.selectedLabel}</b> —
+        {missPct ? <> has typically been <b>~{missPct}% off</b> when tested on seasons it hadn&apos;t seen</> : <> was chosen for this demand pattern</>}
+        {skillGood
+          ? <>, <span className="good">{(fc.skillVsNaive * 100).toFixed(0)}% more accurate</span> than just copying last year.</>
+          : <>. Honest note: on this product, simply copying last year is about as accurate — the forecast can&apos;t add much here.</>}
+      </p>
+      <div className="mt">Demand pattern: <b>{c.label}</b> — {CLASS_BLURB[c.label]}</div>
+      <details className="how">
+        <summary>The scoreboard (for the quants)</summary>
+        <div className="howbody">
+          <table className="lead">
+            <thead><tr><th>Model</th><th>MASE</th><th>WAPE</th><th>Bias</th></tr></thead>
+            <tbody>
+              {fc.candidates.map((cd) => (
+                <tr key={cd.key} className={cd.key === fc.selectedKey ? "sel" : ""}>
+                  <td>{cd.label}{cd.key === fc.selectedKey && <span className="win">chosen</span>}</td>
+                  <td>{isFinite(cd.mase) ? cd.mase.toFixed(3) : "—"}</td>
+                  <td>{isFinite(cd.wape) ? (cd.wape * 100).toFixed(1) + "%" : "—"}</td>
+                  <td>{isFinite(cd.bias) ? pct(cd.bias) : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p style={{ margin: "10px 0 0" }}>
+            Scored by rolling-origin cross-validation against a seasonal-naive benchmark. MASE &lt; 1 beats naive;
+            WAPE is average % miss; bias is systematic over/under-forecasting. Pattern label from ADI {isFinite(c.adi) ? c.adi.toFixed(1) : "—"} / CV² {isFinite(c.cv2) ? c.cv2.toFixed(2) : "—"}
+            (Syntetos–Boylan). Industry context: fashion SKU forecasts typically run 30–40% off; new items 50–100%.
+          </p>
+        </div>
+      </details>
     </Sheet>
   );
 }
@@ -283,7 +331,7 @@ function DriverSheet({ fc }: { fc: ForecastResult }) {
   const drivers = fc.drivers.filter((d) => isFinite(d.coef));
   const maxAbs = Math.max(1e-6, ...drivers.map((d) => Math.abs(d.coef)));
   return (
-    <Sheet no="04" name="Demand drivers" right="standardized effect">
+    <Sheet no="04" name="What moves demand" right="standardized effect">
       <p className="ph">What moves this SKU&apos;s sales, holding the rest fixed — learned by the driver-regression model.</p>
       <div className="drv">
         {drivers.map((d) => {
@@ -316,7 +364,7 @@ function EconSheet({ it, econ, horizon, onEcon, onHorizon }: { it: SkuItem; econ
     );
   };
   return (
-    <Sheet no="05" name="Economics" right="cost of being wrong">
+    <Sheet no="05" name="The cost of being wrong" right="cost of being wrong">
       <p className="ph">These set Cu and Co — the only thing that separates the optimal quantity from a naive forecast.</p>
       <div className="econ">
         {field("price", "Retail $", "$")}
@@ -331,7 +379,9 @@ function EconSheet({ it, econ, horizon, onEcon, onHorizon }: { it: SkuItem; econ
 }
 
 function RiskSheet({ samples, plan }: { samples: number[]; plan: Decision }) {
+  const rm = useReducedMotion();
   const [Q, setQ] = useState(plan.Qstar);
+  const [run, setRun] = useState(0);                     // season-drop simulation run counter
   const nv = plan.nv;
   const lo = quantile(samples, 0.005), hi = quantile(samples, 0.995);
   const clampQ = (q: number) => Math.round(Math.min(hi, Math.max(lo, q)));
@@ -343,7 +393,7 @@ function RiskSheet({ samples, plan }: { samples: number[]; plan: Decision }) {
   const counts = Array(BINS).fill(0);
   for (const d of samples) { const b = Math.min(BINS - 1, Math.max(0, Math.floor(((d - lo) / (hi - lo || 1)) * BINS))); counts[b]++; }
   const maxC = Math.max(...counts, 1);
-  const W = 720, Ht = 200, padL = 10, padR = 10, padT = 20, padB = 24;
+  const W = 720, Ht = 224, padL = 10, padR = 10, padT = 44, padB = 24;
   const X = (q: number) => padL + ((q - lo) / (hi - lo || 1)) * (W - padL - padR);
   const bw = (W - padL - padR) / BINS;
   const YH = (c: number) => (c / maxC) * (Ht - padT - padB);
@@ -352,9 +402,28 @@ function RiskSheet({ samples, plan }: { samples: number[]; plan: Decision }) {
     const vx = ((e.clientX - rect.left) / rect.width) * W;
     return clampQ(lo + ((vx - padL) / (W - padL - padR)) * (hi - lo));
   };
+  // 60 sampled seasons for the drop animation (seeded per run)
+  const DROPS = 60;
+  const drops = useMemo(() => {
+    if (!run) return [] as { v: number; x: number; y: number; hit: boolean }[];
+    const rng = makeRng(run * 7919 + 29);
+    const stack = Array(BINS).fill(0);
+    return Array.from({ length: DROPS }, () => {
+      const v = samples[(rng() * samples.length) | 0];
+      const b = Math.min(BINS - 1, Math.max(0, Math.floor(((v - lo) / (hi - lo || 1)) * BINS)));
+      const y = padT - 8 - stack[b] * 7;
+      stack[b]++;
+      return { v, x: padL + b * bw + bw / 2 + (rng() - 0.5) * 3, y, hit: v <= Q };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run, samples, lo, hi, Q]);
+  const hits = drops.filter((d) => d.hit).length;
   return (
-    <Sheet no="06" name="Risk explorer" right="drag the cut line">
-      <p className="ph">The winning model&apos;s 5,000 season-demand outcomes. Drag the orange line (or use the slider) to feel the trade-off — demand you cover vs. demand you miss.</p>
+    <Sheet no="06" name="What if you cut more — or less" right="drag the orange line">
+      <p className="answer">
+        Each bar is how often that level of demand happens across 5,000 simulated seasons. Everything <b>left</b> of the
+        orange line you can serve; everything <b>right</b> of it you&apos;d miss. Drag it and feel the trade-off.
+      </p>
       <svg className="chart risk-svg" viewBox={`0 0 ${W} ${Ht}`} role="img"
         aria-label={`Demand distribution with adjustable cut quantity, currently ${fmt(Q)} units`}
         onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); setQ(qFrom(e)); }}
@@ -371,7 +440,24 @@ function RiskSheet({ samples, plan }: { samples: number[]; plan: Decision }) {
         <circle cx={X(Q)} cy={padT + 4} r={2.6} fill="var(--surface)" />
         <text x={padL} y={Ht - 8} fontSize={9} fill="var(--faint)" fontFamily="var(--mono)">{fmt(lo)}</text>
         <text x={W - padR} y={Ht - 8} textAnchor="end" fontSize={9} fill="var(--faint)" fontFamily="var(--mono)">{fmt(hi)}</text>
+        {drops.map((d, i) => (
+          <motion.circle key={run + ":" + i} r={3}
+            fill={d.hit ? "var(--good)" : "var(--red)"} stroke="var(--surface)" strokeWidth={0.8}
+            initial={rm ? { cx: d.x, cy: d.y, opacity: 1 } : { cx: d.x, cy: -8, opacity: 0 }}
+            animate={{ cx: d.x, cy: d.y, opacity: 1 }}
+            transition={rm ? { duration: 0 } : { delay: i * 0.045, duration: 0.5, ease: [0.55, 0, 0.85, 0.4] }} />
+        ))}
       </svg>
+      <div className="simbtnrow">
+        <button className="btn" onClick={() => { setRun((n) => n + 1); vib(8); }}>
+          ▸ {run ? "Replay" : "Play"} 60 seasons
+        </button>
+        {run > 0 && (
+          <span className="simnote" aria-live="polite">
+            <b className="hit">{hits} served</b> · <b className="miss">{DROPS - hits} sold out</b> at {fmt(Q)} u
+          </span>
+        )}
+      </div>
       <div className="qrow">
         <span className="qlab">your cut</span>
         <input className="slider" type="range" min={Math.floor(lo)} max={Math.ceil(hi)} step={1} value={Q}
@@ -403,7 +489,7 @@ function SizeSheet({ it, Qstar, weights, onWeights }: { it: SkuItem; Qstar: numb
   const maxU = Math.max(...units, 1);
   const totW = w.reduce((a, b) => a + b, 0) || 1;
   return (
-    <Sheet no="08" name="Size run" right={it.nm}>
+    <Sheet no="08" name="Which sizes to cut" right={it.nm}>
       <p className="ph">The cut split into a size run the factory can cut against. Edit the curve — integer allocation always sums exactly to the cut.</p>
       <div className="sizehead"><span>size</span><span></span><span style={{ textAlign: "right" }}>curve %</span><span style={{ textAlign: "right" }}>units</span></div>
       <div className="sizes">
@@ -437,7 +523,7 @@ function QRSheet({ it, fc, econ }: { it: SkuItem; fc: ForecastResult; econ: Econ
   const pos = qr.savings > 0;
   const readPct = (k / H) * 100;
   return (
-    <Sheet no="09" name="Quick response" right="why short lead times win">
+    <Sheet no="09" name="What speed is worth" right="why short lead times win">
       <p className="ph">
         The bet behind domestic manufacturing: commit a lean first cut, watch the first {k} month{k > 1 ? "s" : ""} of real
         sales, then re-cut at short lead time once you know if it&apos;s a hit. This simulates both strategies over 1,200
@@ -502,13 +588,13 @@ function QRSheet({ it, fc, econ }: { it: SkuItem; fc: ForecastResult; econ: Econ
 
 function BacktestSheet({ it, cm, econ, horizon, score }: { it: SkuItem; cm: Compute; econ: Econ; horizon: number; score: (it: SkuItem, h: Holdout, econ: Econ) => { actual: number; scored: Record<string, ReturnType<typeof realizedCost>> }; }) {
   const holdout = cm.holdouts[0];
-  if (!holdout) return <Sheet no="07" name="Backtest"><p className="ph">Needs ≥ {2 * M + horizon} months (two seasons to learn + one to hold out). This has {it.series.length}.</p></Sheet>;
+  if (!holdout) return <Sheet no="07" name="Did it actually work"><p className="ph">Needs ≥ {2 * M + horizon} months (two seasons to learn + one to hold out). This has {it.series.length}.</p></Sheet>;
   const bt = score(it, holdout, econ);
   const rows: [string, string][] = [["newsvendor", "Loom Reach"], ["makeToMean", "Make-to-forecast"], ["lastSeasonPlus10", "Last season +10%"], ["runRate", "Recent run-rate"]];
   const maxCost = Math.max(...rows.map(([k]) => bt.scored[k].total)) || 1;
   const nvWon = bt.scored.newsvendor.total <= bt.scored.makeToMean.total;
   return (
-    <Sheet no="07" name="Backtest" right={`held-out ${horizon}mo`}>
+    <Sheet no="07" name="Did it actually work" right={`held-out ${horizon}mo`}>
       <p className="ph">Train the whole brain on history up to the last season, decide a quantity, then score each strategy against what actually sold.</p>
       <div className="btbars">
         {rows.map(([k, lab]) => {
@@ -567,7 +653,7 @@ function CapacitySheet({ rows }: { rows: { it: SkuItem; samples: number[]; econ:
   const res = useMemo(() => allocateCapacity(skus, cap), [skus, cap]);
   const byId = new Map(res.alloc.map((a) => [a.id, a]));
   return (
-    <Sheet no="0C" name="Factory capacity" right="who gets the machines">
+    <Sheet no="0C" name="Who gets the machines" right="who gets the machines">
       <p className="ph">When capacity is scarce, pro-rata cuts everything equally — the optimal split gives scarce units to the SKUs whose next unit earns the most. Drag the capacity down and watch the allocation defend margin.</p>
       <div className="qrctl" style={{ gridTemplateColumns: "1fr" }}>
         <div className="f">
@@ -657,26 +743,25 @@ function PlanScreen({ items, compute, econFor, horizon, portfolio, openSku }: {
         </div>
       ) : (
         <div style={{ marginTop: 14 }}>
-          <Sheet no="00" name="Production plan" right={`${horizon}-mo season · ${rows.length} SKUs`}>
-            <p className="ph">Every SKU&apos;s recommended cut in one order sheet. Tap a row for the full work-up; export the plan for your production schedule.</p>
-            <div className="planwrap">
-              <table className="plan">
-                <thead><tr><th>SKU</th><th>Cut</th><th>Mean fc.</th><th>Buffer</th><th>E[saving]</th></tr></thead>
-                <tbody>
-                  {rows.map((r) => (
-                    <tr key={r.it.id} onClick={() => openSku(r.it.id)}
-                      tabIndex={0}
-                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openSku(r.it.id); } }}>
-                      <td>{r.it.nm}<span className="mdl">{r.it.id} · {r.fc.selectedLabel} · {r.fc.classification.label}</span></td>
-                      <td className="q">{fmt(r.d.Qstar)}</td>
-                      <td>{fmt(r.d.QtoMean)}</td>
-                      <td>{r.d.Qstar - r.d.QtoMean >= 0 ? "+" : ""}{fmt(r.d.Qstar - r.d.QtoMean)}</td>
-                      <td className="save">{money(r.save)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot><tr><td>Total</td><td className="q">{fmt(totQ)}</td><td></td><td></td><td className="save">{money(totSave)}</td></tr></tfoot>
-              </table>
+          <Sheet no="00" name="The plan" right={`${horizon}-mo season · ${rows.length} SKUs`}>
+            <p className="answer">One number per product: how many to make. Tap any product for the full story.</p>
+            <div className="planrows">
+              {rows.map((r) => {
+                const buffer = r.d.Qstar - r.d.QtoMean;
+                return (
+                  <button key={r.it.id} className="planrow" onClick={() => openSku(r.it.id)}>
+                    <span className="pn">{r.it.nm}</span>
+                    <span className="pq">{fmt(r.d.Qstar)}<small>units to cut</small></span>
+                    <span className="pd">
+                      {buffer >= 0 ? `+${fmt(buffer)} safety buffer` : `${fmt(buffer)} vs average`} · planning this way saves <b>~{money(r.save)}</b>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="plantotal">
+              <span className="k">Season total</span>
+              <span className="v"><NumberFlow value={totQ} format={INT} /> <small>units · ~{money(totSave)} protected</small></span>
             </div>
             <div className="actions">
               <button className="btn primary" onClick={exportCSV}><Download size={14} /> Export plan CSV</button>
@@ -709,7 +794,7 @@ function SkuScreen({ it, cm, items, econ, horizon, sizes, onEcon, onHorizon, onS
       </div>
       <div className="sheets">
         <DecisionSheet it={it} plan={plan} horizon={horizon} samples={cm.fc.samples} />
-        <Sheet no="02" name="Forecast" right={`${it.real ? "● real" : "○ illustrative"} · ${it.series.length}mo`}>
+        <Sheet no="02" name="What will sell" right={`${it.real ? "● real" : "○ illustrative"} · ${it.series.length}mo`}>
           <div className="fcgrid">
             <div><ForecastChart it={it} fc={cm.fc} horizon={horizon} /></div>
             <div><Seasonality it={it} /><div className="fp-cap">seasonality fingerprint · monthly index</div></div>
