@@ -186,18 +186,39 @@ export default function LoomReach() {
     switchSource(source === "upload" ? "upload" : source);
     setUpload({ error: null, warnings: [], okay: "Saved session cleared." });
   }
+  function applyIngest(items2: SkuItem[], warnings: string[], src: string) {
+    const longest = Math.max(...items2.map((i) => i.series.length));
+    setItems(items2); setSelected(0); setEconOverride({}); setHorizon(Math.min(12, Math.max(1, longest - 2 * M)));
+    setUpload({ error: null, warnings, okay: items2.length + " SKU" + (items2.length > 1 ? "s" : "") + " loaded from " + src + " — review unit economics below." });
+  }
+  // server-side ingestion: POST a Shopify orders export to /api/ingest
+  async function ingestOrders(json: unknown, srcLabel: string) {
+    setUpload({ error: null, warnings: [], okay: "Ingesting on the server…" });
+    try {
+      const res = await fetch("/api/ingest", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(json) });
+      const data = (await res.json()) as { items: SkuItem[]; warnings: string[]; error: string | null };
+      if (data.error || !data.items?.length) { setUpload({ error: data.error ?? "Nothing ingested.", warnings: data.warnings ?? [], okay: null }); return; }
+      applyIngest(data.items, data.warnings, srcLabel);
+    } catch (err) { setUpload({ error: "Ingestion failed: " + (err as Error).message, warnings: [], okay: null }); }
+  }
+  async function loadSampleShopify() {
+    try {
+      const r = await fetch("/sample-orders.json");
+      await ingestOrders(await r.json(), "the sample Shopify export");
+    } catch (err) { setUpload({ error: "Could not load the sample export: " + (err as Error).message, warnings: [], okay: null }); }
+  }
   function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     e.target.value = ""; // allow re-picking the same file
     if (!f) return;
+    const isJson = /\.json$/i.test(f.name);
     const rd = new FileReader();
     rd.onload = () => {
       try {
+        if (isJson) { void ingestOrders(JSON.parse(String(rd.result)), "your Shopify export"); return; }
         const res = parseCSV(String(rd.result));
         if (res.error || !res.items.length) { setUpload({ error: res.error ?? "No rows parsed.", warnings: res.warnings, okay: null }); return; }
-        const longest = Math.max(...res.items.map((i) => i.series.length));
-        setItems(res.items); setSelected(0); setEconOverride({}); setHorizon(Math.min(12, Math.max(1, longest - 2 * M)));
-        setUpload({ error: null, warnings: res.warnings, okay: res.items.length + " SKU" + (res.items.length > 1 ? "s" : "") + " loaded — set unit economics per SKU below." });
+        applyIngest(res.items, res.warnings, "your CSV");
       } catch (err) { setUpload({ error: "Could not parse the file: " + (err as Error).message, warnings: [], okay: null }); }
     };
     rd.readAsText(f);
@@ -249,10 +270,13 @@ export default function LoomReach() {
           <>
             <label className="drop">
               <Upload size={18} style={{ color: "var(--blue)" }} /><br />
-              <b>Drop a CSV</b> or click to browse — plan your own SKUs.
-              <div className="ex">columns: sku, date, units · daily/weekly rows auto-aggregate to months · ≥ 24 months best</div>
-              <input type="file" accept=".csv,text/csv,.txt" onChange={onFile} />
+              <b>Drop a sales CSV or a Shopify orders export (.json)</b> — plan your own SKUs.
+              <div className="ex">csv: sku, date, units (daily/weekly auto-aggregate) · json: Shopify Admin orders export, aggregated server-side</div>
+              <input type="file" accept=".csv,text/csv,.txt,.json,application/json" onChange={onFile} />
             </label>
+            <div className="actions" style={{ marginTop: 0, marginBottom: 10 }}>
+              <button className="btn" onClick={() => void loadSampleShopify()}>Try a sample Shopify export → /api/ingest</button>
+            </div>
             {(upload.error || upload.okay || upload.warnings.length > 0) && (
               <div className="uplist" role="status">
                 {upload.error && <div className="upmsg err"><TriangleAlert size={13} style={{ flexShrink: 0, marginTop: 1 }} />{upload.error}</div>}
@@ -311,7 +335,7 @@ export default function LoomReach() {
       </div>
 
       <p className="foot">
-        <b>Real:</b> the model competition (seasonal-naive · Holt-Winters ETS · multiplicative ETS · Croston/SBA · driver regression · combination), the rolling-origin cross-validation that selects the winner, the demand classification, driver coefficients, and the newsvendor optimization all run in your browser. <b>Illustrative:</b> the default catalog is labeled sample data with realistic drivers; <b>Real data</b> runs the identical brain on published series; <b>Upload</b> runs it on yours. Built by <b>[your name]</b> · independent concept for the Anatar / Loom team.
+        <b>Real:</b> the model competition (seasonal-naive · Holt-Winters ETS · multiplicative ETS · Croston/SBA · driver regression · combination), the rolling-origin cross-validation that selects the winner, the demand classification, driver coefficients, and the newsvendor optimization all run in your browser. <b>Illustrative:</b> the default catalog is labeled sample data with realistic drivers; <b>Real data</b> runs the identical brain on published series; <b>Upload</b> runs it on yours. Built by <b>Max Mohammadi</b> · independent concept for the Anatar / Loom team · <a href="/pitch" style={{ color: "var(--signal-ink)" }}>why this exists →</a>
       </p>
     </>
   );

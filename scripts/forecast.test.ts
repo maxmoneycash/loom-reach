@@ -119,6 +119,27 @@ const cat = loadApparel();
 ok("catalog: 10 SKUs", cat.length === 10, cat.map((c) => c.id).join(","));
 ok("catalog: all have 48 months + drivers", cat.every((c) => c.series.length === 48 && !!c.drivers));
 
+/* ---- 11. Shopify orders adapter ---- */
+import { ordersToSkus } from "../lib/shopify";
+const shop = ordersToSkus({ orders: [
+  { created_at: "2024-01-05T10:00:00Z", line_items: [{ sku: "A", title: "Alpha", quantity: 10, price: "50.00" }] },
+  { created_at: "2024-01-20T10:00:00Z", line_items: [{ sku: "A", title: "Alpha", quantity: 5, price: "50.00" }, { sku: "B", title: "Beta", quantity: 2, price: "20.00" }] },
+  { created_at: "2024-03-02T10:00:00Z", line_items: [{ sku: "A", title: "Alpha", quantity: 7, price: "50.00" }] },
+  { created_at: "2024-02-14T10:00:00Z", cancelled_at: "2024-02-15T10:00:00Z", line_items: [{ sku: "A", quantity: 99 }] },
+]});
+ok("shopify: 2 SKUs, cancelled excluded", shop.items.length === 2 && shop.error === null, shop.items.map((i) => i.id).join(","));
+const alpha = shop.items.find((i) => i.id === "shop-A")!;
+ok("shopify: Alpha monthly agg [15,0,7] with gap fill", alpha.series.join(",") === "15,0,7", alpha.series.join(","));
+ok("shopify: price inferred from revenue (ASP $50)", alpha.econ.price === 50, String(alpha.econ.price));
+ok("shopify: cancelled-order warning present", shop.warnings.some((w) => /cancelled/i.test(w)));
+ok("shopify: bare array also accepted", ordersToSkus([{ created_at: "2024-05-01", line_items: [{ sku: "X", quantity: 3 }] }]).items.length === 1);
+ok("shopify: garbage → clean error", ordersToSkus({ nope: true }).error !== null);
+import { readFileSync } from "node:fs";
+const sample = JSON.parse(readFileSync(__dirname + "/../public/sample-orders.json", "utf8"));
+const sres = ordersToSkus(sample);
+ok("shopify: bundled sample ingests (2 SKUs, 36 months)", sres.items.length === 2 && sres.items.every((i) => i.series.length === 36),
+   sres.items.map((i) => i.id + ":" + i.series.length).join(" "));
+
 console.log("\n--- champagne leaderboard (by MASE) ---");
 rc.candidates.forEach((c) => console.log(`  ${c.key.padEnd(8)} MASE ${c.mase.toFixed(3)}  WAPE ${(c.wape * 100).toFixed(1)}%  bias ${(c.bias * 100).toFixed(1)}%`));
 console.log(`selected: ${rc.selectedLabel} · skill vs naive ${(rc.skillVsNaive * 100).toFixed(1)}% · class ${rc.classification.label}`);
