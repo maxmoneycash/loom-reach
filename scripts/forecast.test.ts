@@ -169,6 +169,40 @@ const fjQR = simulateQR(fjFc.point, fjFc.resid, fjRatios, { price: 240, unitCost
 ok("qr: runs end-to-end on catalog SKU with estimated level ratios", isFinite(fjQR.savings) && fjQR.lambdaN >= 2,
    "λn=" + fjQR.lambdaN + " savings=$" + Math.round(fjQR.savings) + " tighten=" + (fjQR.tightenPct * 100).toFixed(0) + "%");
 
+/* ---- 13. capacity-constrained allocation ---- */
+import { allocateCapacity, expectedProfit } from "../lib/capacity";
+const mkSamples = (mu: number, spread: number, seed: number) => {
+  const r = makeRng(seed);
+  return Array.from({ length: 2000 }, () => Math.max(0, mu + (r() - 0.5) * spread)).sort((a, b) => a - b);
+};
+const capSkus = [
+  { id: "HI", samples: mkSamples(1000, 400, 1), econ: { price: 200, unitCost: 60, salvage: 20 } },   // fat margin
+  { id: "LO", samples: mkSamples(1000, 400, 2), econ: { price: 70, unitCost: 60, salvage: 20 } },    // thin margin
+];
+const ample = allocateCapacity(capSkus, 999999);
+ok("cap: ample capacity → everyone gets own Q*, not binding", !ample.binding && ample.alloc.every((a) => a.q === a.unconstrained));
+const tight = allocateCapacity(capSkus, 1200);
+ok("cap: binding allocation sums exactly to capacity", tight.binding && tight.alloc.reduce((a, x) => a + x.q, 0) === 1200,
+   tight.alloc.map((a) => a.id + ":" + a.q).join(" "));
+const hiA = tight.alloc.find((a) => a.id === "HI")!, loA = tight.alloc.find((a) => a.id === "LO")!;
+ok("cap: fat-margin SKU keeps far more of scarce capacity", hiA.q > loA.q * 2, `HI=${hiA.q} LO=${loA.q}`);
+ok("cap: optimal beats pro-rata expected profit", tight.gain > 0, "$" + Math.round(tight.gain));
+// exhaustive check on a tiny case: greedy threshold matches brute force
+const tiny = [
+  { id: "A", samples: mkSamples(50, 40, 3), econ: { price: 100, unitCost: 40, salvage: 10 } },
+  { id: "B", samples: mkSamples(50, 40, 4), econ: { price: 60, unitCost: 40, salvage: 10 } },
+];
+const capN = 60;
+const opt = allocateCapacity(tiny, capN);
+let best = -Infinity, bestQa = 0;
+for (let qa = 0; qa <= capN; qa++) {
+  const v = expectedProfit(qa, tiny[0].samples, tiny[0].econ) + expectedProfit(capN - qa, tiny[1].samples, tiny[1].econ);
+  if (v > best) { best = v; bestQa = qa; }
+}
+ok("cap: matches brute-force optimum (±2 u, ±0.5% profit)",
+   Math.abs((opt.alloc[0].q) - bestQa) <= 2 && opt.profitOptimal >= best * 0.995,
+   `greedy A=${opt.alloc[0].q} brute A=${bestQa} · $${Math.round(opt.profitOptimal)} vs $${Math.round(best)}`);
+
 console.log("\n--- champagne leaderboard (by MASE) ---");
 rc.candidates.forEach((c) => console.log(`  ${c.key.padEnd(8)} MASE ${c.mase.toFixed(3)}  WAPE ${(c.wape * 100).toFixed(1)}%  bias ${(c.bias * 100).toFixed(1)}%`));
 console.log(`selected: ${rc.selectedLabel} · skill vs naive ${(rc.skillVsNaive * 100).toFixed(1)}% · class ${rc.classification.label}`);

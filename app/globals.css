@@ -268,6 +268,18 @@ svg.chart{display:block;width:100%;height:auto;overflow:visible;margin-top:4px}
 .stagebar .s1{background:var(--ink)} .stagebar .sread{background:var(--blue)} .stagebar .s2{background:var(--signal)}
 .stagecap{display:flex;justify-content:space-between;font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:5px}
 
+/* ---------- capacity allocation ---------- */
+.caprows{display:flex;flex-direction:column;gap:9px;margin-top:10px}
+.caprow{display:grid;grid-template-columns:minmax(90px,130px) 1fr auto;gap:11px;align-items:center;font-size:12px}
+.caprow .cn{color:var(--ink);font-weight:500;line-height:1.2}
+.caprow .cn small{display:block;font-family:var(--mono);font-size:9px;color:var(--faint);font-weight:400}
+.capbar{position:relative;height:18px;background:var(--surface-2);border:1px solid var(--line-2);border-radius:4px;overflow:hidden}
+.capbar .want{position:absolute;left:0;top:0;height:100%;background:repeating-linear-gradient(45deg,var(--line-2),var(--line-2) 3px,transparent 3px,transparent 6px)}
+.capbar .got{position:absolute;left:0;top:0;height:100%;background:var(--signal);opacity:.85;transition:width .35s cubic-bezier(.16,1,.3,1)}
+.caprow .cq{font-family:var(--mono);font-size:11px;white-space:nowrap;text-align:right;color:var(--muted)}
+.caprow .cq b{color:var(--ink)}
+.caprow .cut-back{color:var(--red)}
+
 /* ---------- production plan table + actions ---------- */
 .btn{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11.5px;padding:10px 14px;min-height:44px;
   border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);transition:border-color .15s,background .15s}

@@ -13,6 +13,7 @@ import { runForecast, type ForecastResult } from "@/lib/forecast";
 import { loadApparel, loadReal, parseCSV, type SkuItem } from "@/lib/data";
 import { loadState, saveState, clearState } from "@/lib/persist";
 import { simulateQR, levelRatios } from "@/lib/quickresponse";
+import { allocateCapacity } from "@/lib/capacity";
 
 const M = 12;
 type Source = "apparel" | "real" | "upload";
@@ -557,6 +558,51 @@ function MethodologyBody() {
   );
 }
 
+/* Capacity sheet — split scarce factory capacity optimally across the catalog */
+function CapacitySheet({ rows }: { rows: { it: SkuItem; samples: number[]; econ: Econ }[] }) {
+  const [capPct, setCapPct] = useState(100);
+  const skus = useMemo(() => rows.map((r) => ({ id: r.it.id, samples: r.samples, econ: r.econ })), [rows]);
+  const baseTotal = useMemo(() => allocateCapacity(skus, Number.MAX_SAFE_INTEGER).totalUnconstrained, [skus]);
+  const cap = Math.round((baseTotal * capPct) / 100);
+  const res = useMemo(() => allocateCapacity(skus, cap), [skus, cap]);
+  const byId = new Map(res.alloc.map((a) => [a.id, a]));
+  return (
+    <Sheet no="0C" name="Factory capacity" right="who gets the machines">
+      <p className="ph">When capacity is scarce, pro-rata cuts everything equally — the optimal split gives scarce units to the SKUs whose next unit earns the most. Drag the capacity down and watch the allocation defend margin.</p>
+      <div className="qrctl" style={{ gridTemplateColumns: "1fr" }}>
+        <div className="f">
+          <label htmlFor="cap-sl">Season capacity <b>{fmt(cap)} u · {capPct}% of plan</b></label>
+          <input id="cap-sl" className="slider" type="range" min={30} max={120} step={1} value={capPct}
+            style={{ ["--fill" as string]: (((capPct - 30) / 90) * 100).toFixed(0) + "%" } as CSSProperties}
+            onChange={(e) => setCapPct(parseInt(e.target.value) || 100)} />
+        </div>
+      </div>
+      {res.binding ? (
+        <div className="note good" style={{ marginTop: 4 }}>
+          Optimal allocation earns <b><NumberFlow value={Math.round(res.gain)} format={INT} prefix="$" /></b> more expected profit than scaling every SKU down {(100 - (cap / baseTotal) * 100).toFixed(0)}% pro-rata.
+        </div>
+      ) : (
+        <div className="note" style={{ marginTop: 4 }}>Capacity covers the full plan — every SKU gets its own optimum. Drag below 100% to see the trade-offs.</div>
+      )}
+      <div className="caprows">
+        {rows.map((r) => {
+          const a = byId.get(r.it.id); if (!a) return null;
+          const w = a.unconstrained > 0 ? (a.q / a.unconstrained) * 100 : 0;
+          const cutBack = a.unconstrained - a.q;
+          return (
+            <div className="caprow" key={r.it.id}>
+              <span className="cn">{r.it.nm}<small>{r.it.id}</small></span>
+              <div className="capbar"><div className="want" style={{ width: "100%" }} /><div className="got" style={{ width: Math.min(100, w).toFixed(1) + "%" }} /></div>
+              <span className="cq"><b>{fmt(a.q)}</b>{cutBack > 0 ? <span className="cut-back"> −{fmt(cutBack)}</span> : " full"}</span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt">Greedy on marginal expected profit — provably optimal for this problem (validated against brute force). Thin-margin SKUs give way first; the fat-margin winners keep their buffer.</div>
+    </Sheet>
+  );
+}
+
 /* =============================== screens =============================== */
 
 function PlanScreen({ items, compute, econFor, horizon, portfolio, openSku }: {
@@ -636,6 +682,11 @@ function PlanScreen({ items, compute, econFor, horizon, portfolio, openSku }: {
               <button className="btn primary" onClick={exportCSV}><Download size={14} /> Export plan CSV</button>
             </div>
           </Sheet>
+          {rows.length > 1 && (
+            <div style={{ marginTop: 14 }}>
+              <CapacitySheet rows={rows.map((r) => ({ it: r.it, samples: compute.get(r.it.id)!.fc.samples, econ: econFor(r.it) }))} />
+            </div>
+          )}
         </div>
       )}
     </div>
