@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter, Space_Grotesk, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -10,6 +10,13 @@ export const metadata: Metadata = {
   title: "Loom Reach · demand-driven production planning",
   description:
     "Turn a SKU's sales history into a demand forecast with honest uncertainty, then solve the production quantity that minimizes the real cost of being wrong. An independent concept for the Anatar / Loom team.",
+  appleWebApp: { capable: true, statusBarStyle: "default", title: "Loom Reach" },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  themeColor: "#f7f8fa",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

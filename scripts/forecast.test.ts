@@ -1,7 +1,7 @@
 /* Headless validation of the forecasting brain. Run: npx tsx scripts/forecast.test.ts */
 import { runForecast, classifyDemand, type Drivers } from "../lib/forecast";
 import { makeRng, quantile, newsvendor } from "../lib/engine";
-import { REAL, loadApparel } from "../lib/data";
+import { REAL, loadApparel, parseCSV } from "../lib/data";
 
 let pass = 0, fail = 0;
 const ok = (name: string, cond: boolean, extra = "") => { if (cond) pass++; else fail++; console.log((cond ? "PASS " : "FAIL ") + name + (extra ? "  " + extra : "")); };
@@ -69,6 +69,32 @@ ok("newsvendor: Q* within plausible band", Qstar > quantile(rc.samples, 0.4) && 
 /* ---- 6. accuracy metrics finite for the winner ---- */
 ok("accuracy: selected model has finite MASE & WAPE", isFinite(rc.accuracy.mase) && isFinite(rc.accuracy.wape),
    "MASE=" + rc.accuracy.mase.toFixed(2) + " WAPE=" + (rc.accuracy.wape * 100).toFixed(1) + "%");
+
+/* ---- 7. CSV parser: real-world shapes ---- */
+const p1 = parseCSV("sku,date,units\nTEE,2024-01,100\nTEE,2024-02,120\nJKT,2024-01,40\nJKT,2024-02,55");
+ok("csv: monthly sku/date/units → 2 SKUs", p1.items.length === 2 && p1.error === null, p1.items.map((i) => i.nm).join(","));
+ok("csv: TEE series [100,120]", (() => { const t = p1.items.find((i) => i.nm === "TEE"); return !!t && t.series[0] === 100 && t.series[1] === 120; })());
+
+const daily = ["sku,date,units"];
+for (let d = 1; d <= 28; d++) daily.push(`A,2024-01-${String(d).padStart(2, "0")},2`);
+for (let d = 1; d <= 28; d++) daily.push(`A,2024-02-${String(d).padStart(2, "0")},3`);
+const p2 = parseCSV(daily.join("\n"));
+ok("csv: daily rows aggregate to months [56,84]", (() => { const a = p2.items[0]; return !!a && a.series.length === 2 && a.series[0] === 56 && a.series[1] === 84; })(),
+   p2.items[0]?.series.join(",") + " | " + p2.warnings.join(" / "));
+ok("csv: aggregation warning emitted", p2.warnings.some((w) => /aggregated/i.test(w)));
+
+const p3 = parseCSV("date;units\n2024-01;10\n2024-03;30");
+ok("csv: semicolon delimiter + gap fill → [10,0,30]", (() => { const a = p3.items[0]; return !!a && a.series.join(",") === "10,0,30"; })(), p3.items[0]?.series.join(","));
+ok("csv: gap warning emitted", p3.warnings.some((w) => /missing month/i.test(w)));
+
+const p4 = parseCSV("Mar 2024,5\nApr 2024,7");
+ok("csv: 'Mar 2024' month names parse", (() => { const a = p4.items[0]; return !!a && a.series.length === 2 && a.labels[0] === "2024-03"; })(), p4.items[0]?.labels.join(","));
+
+const p5 = parseCSV("hello\nworld");
+ok("csv: garbage → clean error, no throw", p5.error !== null && p5.items.length === 0, p5.error ?? "");
+
+const p6 = parseCSV("10\n20\n30\n40");
+ok("csv: bare single column still works", p6.items.length === 1 && p6.items[0].series.length === 4);
 
 console.log("\n--- champagne leaderboard (by MASE) ---");
 rc.candidates.forEach((c) => console.log(`  ${c.key.padEnd(8)} MASE ${c.mase.toFixed(3)}  WAPE ${(c.wape * 100).toFixed(1)}%  bias ${(c.bias * 100).toFixed(1)}%`));

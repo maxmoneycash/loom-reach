@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo, useState, type CSSProperties } from "react";
-import { Upload, TriangleAlert } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Upload, TriangleAlert, Download, RotateCcw } from "lucide-react";
 import { newsvendor, quantile, avg, expectedCost, realizedCost, type Econ } from "@/lib/engine";
 import { runForecast, type ForecastResult } from "@/lib/forecast";
 import { loadApparel, loadReal, parseCSV, type SkuItem } from "@/lib/data";
+import { loadState, saveState, clearState } from "@/lib/persist";
 
 const M = 12;
 type Source = "apparel" | "real" | "upload";
@@ -38,7 +39,7 @@ function Sparkline({ series }: { series: number[] }) {
   const w = 100, h = 30;
   const min = Math.min(...series), max = Math.max(...series), rng = max - min || 1;
   const d = series.map((v, i) => { const x = (i / (series.length - 1)) * w; const y = h - ((v - min) / rng) * h; return (i ? "L" : "M") + x.toFixed(1) + " " + y.toFixed(1); }).join(" ");
-  return <svg className="spark" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none"><path d={d} fill="none" stroke="var(--signal)" strokeWidth={1.4} strokeLinejoin="round" /></svg>;
+  return <svg className="spark" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" aria-hidden="true"><path d={d} fill="none" stroke="var(--signal)" strokeWidth={1.4} strokeLinejoin="round" /></svg>;
 }
 
 function ForecastChart({ it, fc, horizon }: { it: SkuItem; fc: ForecastResult; horizon: number }) {
@@ -58,7 +59,8 @@ function ForecastChart({ it, fc, horizon }: { it: SkuItem; fc: ForecastResult; h
   const labIdx = [0, Math.floor(n / 2), n - 1];
   return (
     <>
-      <svg className="chart" viewBox={`0 0 ${W} ${Ht}`}>
+      <svg className="chart" viewBox={`0 0 ${W} ${Ht}`} role="img"
+        aria-label={`Demand history and ${H}-month forecast for ${it.nm}, with an 80 percent prediction interval`}>
         {gridV.map((v, i) => (<g key={i}><line x1={padL} y1={Y(v)} x2={W - padR} y2={Y(v)} stroke="var(--line-2)" /><text x={padL - 7} y={Y(v) + 3} textAnchor="end" fontSize={9} fill="var(--faint)" fontFamily="var(--mono)">{fmt(v)}</text></g>))}
         <line x1={sep} y1={padT} x2={sep} y2={Ht - padB} stroke="var(--line)" strokeDasharray="2 3" />
         <polygon points={bandPts} fill="var(--blue)" fillOpacity={0.13} stroke="none" />
@@ -90,8 +92,39 @@ export default function LoomReach() {
   const [selected, setSelected] = useState(0);
   const [horizon, setHorizon] = useState(12);
   const [econOverride, setEconOverride] = useState<Record<string, Econ>>({});
+  const [upload, setUpload] = useState<{ error: string | null; warnings: string[]; okay: string | null }>({ error: null, warnings: [], okay: null });
+  const hydrated = useRef(false);
 
   const econFor = (it: SkuItem): Econ => econOverride[it.id] || it.econ;
+
+  // restore saved session (after mount — keeps SSG hydration deterministic).
+  // setState here is intentional: localStorage is unavailable during prerender,
+  // so restoring in an initializer would cause a hydration mismatch.
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    const p = loadState();
+    if (p) {
+      let restored: SkuItem[] | null = null;
+      if (p.source === "upload" && p.uploaded?.length) {
+        restored = p.uploaded;
+        setSource("upload"); setItems(restored);
+        setUpload({ error: null, warnings: [], okay: restored.length + " SKU" + (restored.length > 1 ? "s" : "") + " restored from your last session." });
+      } else if (p.source === "real") { restored = loadReal(); setSource("real"); setItems(restored); }
+      else { restored = loadApparel(); }
+      const idx = restored ? restored.findIndex((x) => x.id === p.selectedId) : -1;
+      if (idx >= 0) setSelected(idx);
+      if (p.econOverride) setEconOverride(p.econOverride);
+      if (p.horizon >= 1 && p.horizon <= 24) setHorizon(p.horizon);
+    }
+    hydrated.current = true;
+  }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  // persist session
+  useEffect(() => {
+    if (!hydrated.current) return;
+    saveState({ source, horizon, econOverride, uploaded: source === "upload" ? items : null, selectedId: items[selected]?.id ?? null });
+  }, [source, horizon, econOverride, items, selected]);
 
   const compute = useMemo(() => {
     const map = new Map<string, Compute>();
@@ -143,18 +176,27 @@ export default function LoomReach() {
 
   function switchSource(s: Source) {
     setSource(s); setSelected(0); setEconOverride({}); setHorizon(12);
+    setUpload({ error: null, warnings: [], okay: null });
     setItems(s === "apparel" ? loadApparel() : s === "real" ? loadReal() : []);
   }
+  function resetAll() {
+    clearState();
+    switchSource(source === "upload" ? "upload" : source);
+    setUpload({ error: null, warnings: [], okay: "Saved session cleared." });
+  }
   function onFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0]; if (!f) return;
+    const f = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file
+    if (!f) return;
     const rd = new FileReader();
     rd.onload = () => {
       try {
-        const parsed = parseCSV(String(rd.result));
-        if (!parsed.length) { alert("No numeric rows found. Expected columns like: sku, date, units."); return; }
-        const longest = Math.max(...parsed.map((i) => i.series.length));
-        setItems(parsed); setSelected(0); setEconOverride({}); setHorizon(Math.min(12, Math.max(1, longest - 2 * M)));
-      } catch (err) { alert("Could not parse CSV: " + (err as Error).message); }
+        const res = parseCSV(String(rd.result));
+        if (res.error || !res.items.length) { setUpload({ error: res.error ?? "No rows parsed.", warnings: res.warnings, okay: null }); return; }
+        const longest = Math.max(...res.items.map((i) => i.series.length));
+        setItems(res.items); setSelected(0); setEconOverride({}); setHorizon(Math.min(12, Math.max(1, longest - 2 * M)));
+        setUpload({ error: null, warnings: res.warnings, okay: res.items.length + " SKU" + (res.items.length > 1 ? "s" : "") + " loaded — set unit economics per SKU below." });
+      } catch (err) { setUpload({ error: "Could not parse the file: " + (err as Error).message, warnings: [], okay: null }); }
     };
     rd.readAsText(f);
   }
@@ -162,7 +204,8 @@ export default function LoomReach() {
 
   const it = items[Math.min(selected, Math.max(0, items.length - 1))];
   const cm = it ? compute.get(it.id) : undefined;
-  const showRoll = portfolio.n > 0;
+  // below ~6 (SKU × origin) evaluations the aggregate is statistical noise — don't headline it
+  const showRoll = portfolio.n >= 6;
 
   return (
     <>
@@ -190,7 +233,7 @@ export default function LoomReach() {
           <div className="summary">
             <div className="strip"><span>Portfolio backtest — rolling held-out seasons</span><span className="r">{portfolio.wins}/{portfolio.n} improved</span></div>
             <div className="body">
-              <span className="big">{money(portfolio.savedVsMean)}</span>
+              <span className="big" style={portfolio.savedVsMean < 0 ? { color: "var(--red)" } : undefined}>{money(portfolio.savedVsMean)}</span>
               <span className="txt">saved vs. make-to-forecast across <b>{portfolio.n}</b> held-out season{portfolio.n > 1 ? "s" : ""} ({items.length} SKUs × rolling origins). Newsvendor wins at portfolio scale, not on every one — it minimizes <b>expected</b> cost.</span>
             </div>
           </div>
@@ -201,12 +244,21 @@ export default function LoomReach() {
           <span className="t mono">{items.length ? "◂ swipe · " + items.length + " ▸" : ""}</span>
         </div>
         {source === "upload" && (
-          <label className="drop">
-            <Upload size={18} style={{ color: "var(--blue)" }} /><br />
-            <b>Drop a CSV</b> or click to browse — plan your own SKUs.
-            <div className="ex">columns: sku, date (YYYY-MM), units · ≥ 24 months</div>
-            <input type="file" accept=".csv,text/csv" onChange={onFile} />
-          </label>
+          <>
+            <label className="drop">
+              <Upload size={18} style={{ color: "var(--blue)" }} /><br />
+              <b>Drop a CSV</b> or click to browse — plan your own SKUs.
+              <div className="ex">columns: sku, date, units · daily/weekly rows auto-aggregate to months · ≥ 24 months best</div>
+              <input type="file" accept=".csv,text/csv,.txt" onChange={onFile} />
+            </label>
+            {(upload.error || upload.okay || upload.warnings.length > 0) && (
+              <div className="uplist" role="status">
+                {upload.error && <div className="upmsg err"><TriangleAlert size={13} style={{ flexShrink: 0, marginTop: 1 }} />{upload.error}</div>}
+                {upload.okay && <div className="upmsg okay">✓ {upload.okay}</div>}
+                {upload.warnings.map((w, i) => <div key={i} className="upmsg warn"><TriangleAlert size={13} style={{ flexShrink: 0, marginTop: 1 }} />{w}</div>)}
+              </div>
+            )}
+          </>
         )}
         {items.length > 0 && (
           <div className="rail">
@@ -226,7 +278,13 @@ export default function LoomReach() {
           </div>
         )}
 
-        {!it && <div className="sheet" style={{ marginTop: 14 }}><h3 className="st">Upload a CSV to begin</h3><p className="ph">Provide <code>sku, date (YYYY-MM), units</code> with ~24+ months of history.</p></div>}
+        {!it && <div className="sheet" style={{ marginTop: 14 }}><h2 className="st">Upload a CSV to begin</h2><p className="ph">Provide <code>sku, date (YYYY-MM), units</code> with ~24+ months of history.</p></div>}
+
+        {items.length > 1 && (
+          <div style={{ marginBottom: 14 }}>
+            <PlanSheet items={items} compute={compute} econFor={econFor} horizon={horizon} selected={selected} onSelect={setSelected} onReset={resetAll} />
+          </div>
+        )}
 
         {it && cm && (
           <div className="sheets reveal" key={it.id + ":" + horizon}>
@@ -242,13 +300,71 @@ export default function LoomReach() {
             <Methodology />
           </div>
         )}
-        {it && !cm && <div className="sheet" style={{ marginTop: 14 }}><h3 className="st">Not enough history</h3><p className="ph">Needs ≥ {M + 2} months; this has {it.series.length}.</p></div>}
+        {it && !cm && <div className="sheet" style={{ marginTop: 14 }}><h2 className="st">Not enough history</h2><p className="ph">Needs ≥ {M + 2} months; this has {it.series.length}.</p></div>}
       </div>
 
       <p className="foot">
         <b>Real:</b> the model competition (seasonal-naive · Holt-Winters ETS · multiplicative ETS · Croston/SBA · driver regression · combination), the rolling-origin cross-validation that selects the winner, the demand classification, driver coefficients, and the newsvendor optimization all run in your browser. <b>Illustrative:</b> the default catalog is labeled sample data with realistic drivers; <b>Real data</b> runs the identical brain on published series; <b>Upload</b> runs it on yours. Built by <b>[your name]</b> · independent concept for the Anatar / Loom team.
       </p>
     </>
+  );
+}
+
+function PlanSheet({ items, compute, econFor, horizon, selected, onSelect, onReset }: {
+  items: SkuItem[]; compute: Map<string, Compute>; econFor: (it: SkuItem) => Econ;
+  horizon: number; selected: number; onSelect: (i: number) => void; onReset: () => void;
+}) {
+  const rows = items.map((it, i) => {
+    const cm = compute.get(it.id); if (!cm) return null;
+    const d = decide(cm.fc.samples, econFor(it));
+    return { i, it, fc: cm.fc, d, save: d.expectedCostMean - d.expectedCostStar };
+  }).filter((r): r is NonNullable<typeof r> => r != null);
+  if (!rows.length) return null;
+  const totQ = rows.reduce((a, r) => a + r.d.Qstar, 0);
+  const totSave = rows.reduce((a, r) => a + r.save, 0);
+
+  function exportCSV() {
+    const esc = (s: string) => /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    const lines = [
+      ["sku", "name", "chosen_model", "demand_pattern", "cut_quantity", "mean_forecast", "uncertainty_buffer", "expected_saving_usd"].join(","),
+      ...rows.map((r) => [esc(r.it.id), esc(r.it.nm), esc(r.fc.selectedLabel), r.fc.classification.label, r.d.Qstar, r.d.QtoMean, r.d.Qstar - r.d.QtoMean, Math.round(r.save)].join(",")),
+      ["TOTAL", "", "", "", totQ, "", "", Math.round(totSave)].join(","),
+    ];
+    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "loom-reach-production-plan-" + horizon + "mo.csv";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  return (
+    <Sheet no="00" name="Production plan" right={`${horizon}-mo season · ${rows.length} SKUs`}>
+      <p className="ph">Every SKU&apos;s recommended cut in one order sheet. Tap a row to inspect its forecast; export the plan for your production schedule.</p>
+      <div className="planwrap">
+        <table className="plan">
+          <thead><tr><th>SKU</th><th>Cut</th><th>Mean fc.</th><th>Buffer</th><th>E[saving]</th></tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.it.id} className={r.i === selected ? "on" : ""} onClick={() => onSelect(r.i)}
+                tabIndex={0} aria-selected={r.i === selected}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(r.i); } }}>
+                <td>{r.it.nm}<span className="mdl">{r.it.id} · {r.fc.selectedLabel} · {r.fc.classification.label}</span></td>
+                <td className="q">{fmt(r.d.Qstar)}</td>
+                <td>{fmt(r.d.QtoMean)}</td>
+                <td>{r.d.Qstar - r.d.QtoMean >= 0 ? "+" : ""}{fmt(r.d.Qstar - r.d.QtoMean)}</td>
+                <td className="save">{money(r.save)}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot><tr><td>Total</td><td className="q">{fmt(totQ)}</td><td></td><td></td><td className="save">{money(totSave)}</td></tr></tfoot>
+        </table>
+      </div>
+      <div className="actions">
+        <button className="btn primary" onClick={exportCSV}><Download size={14} /> Export plan CSV</button>
+        <button className="btn" onClick={onReset}><RotateCcw size={13} /> Reset session</button>
+      </div>
+    </Sheet>
   );
 }
 
@@ -336,8 +452,8 @@ function DriverSheet({ fc }: { fc: ForecastResult }) {
 
 function EconSheet({ it, econ, horizon, onEcon, onHorizon }: { it: SkuItem; econ: Econ; horizon: number; onEcon: (k: keyof Econ, v: number) => void; onHorizon: (v: number) => void; }) {
   const field = (k: keyof Econ, label: string, pre: string) => (
-    <div className="f"><label>{label}</label><div className="inp"><span>{pre}</span>
-      <input type="number" min={0} step={1} value={econ[k]} onChange={(e) => onEcon(k, parseFloat(e.target.value))} inputMode="decimal" /></div></div>
+    <div className="f"><label htmlFor={"econ-" + k}>{label}</label><div className="inp"><span aria-hidden="true">{pre}</span>
+      <input id={"econ-" + k} type="number" min={0} step={1} value={econ[k]} onChange={(e) => onEcon(k, parseFloat(e.target.value))} inputMode="decimal" autoComplete="off" /></div></div>
   );
   return (
     <Sheet no="05" name="Economics" right="cost of being wrong">
@@ -346,8 +462,8 @@ function EconSheet({ it, econ, horizon, onEcon, onHorizon }: { it: SkuItem; econ
         {field("price", "Retail $", "$")}
         {field("unitCost", "Unit cost", "$")}
         {field("salvage", "Salvage $", "$")}
-        <div className="f"><label>Season (mo)</label><div className="inp"><span></span>
-          <input type="number" min={1} max={Math.max(1, it.series.length - 2 * M)} step={1} value={horizon} onChange={(e) => onHorizon(parseInt(e.target.value) || 12)} inputMode="numeric" /></div></div>
+        <div className="f"><label htmlFor="econ-horizon">Season (mo)</label><div className="inp"><span></span>
+          <input id="econ-horizon" type="number" min={1} max={Math.max(1, it.series.length - 2 * M)} step={1} value={horizon} onChange={(e) => onHorizon(parseInt(e.target.value) || 12)} inputMode="numeric" autoComplete="off" /></div></div>
       </div>
       <div className="mt">Cu = price − unit cost (margin lost on a stockout) · Co = unit cost − salvage (lost on overstock).{it.real ? "" : " Defaults reflect typical apparel economics; change them to your numbers."}</div>
     </Sheet>
@@ -370,7 +486,8 @@ function CostCurveChart({ samples, plan }: { samples: number[]; plan: Decision }
   return (
     <>
       <p className="ph">Expected cost of each quantity over 5,000 demand draws from the winning model. The minimum is exactly the newsvendor Q* — not the mean.</p>
-      <svg className="chart" viewBox={`0 0 ${W} ${Ht}`}>
+      <svg className="chart" viewBox={`0 0 ${W} ${Ht}`} role="img"
+        aria-label={`Expected cost by production quantity; the minimum is at the newsvendor optimum of ${fmt(plan.Qstar)} units`}>
         {gridC.map((c, i) => (<g key={i}><line x1={padL} y1={Y(c)} x2={W - padR} y2={Y(c)} stroke="var(--line-2)" /><text x={padL - 7} y={Y(c) + 3} textAnchor="end" fontSize={9} fill="var(--faint)" fontFamily="var(--mono)">{money(c)}</text></g>))}
         <path d={path} fill="none" stroke="var(--blue)" strokeWidth={2} />
         {mark(plan.QtoMean, "var(--faint)", "mean", true, "m")}

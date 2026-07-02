@@ -83,33 +83,90 @@ export function loadReal(): SkuItem[] {
   return Object.keys(REAL).map((k) => { const d = REAL[k]; return { id: k, nm: d.name, cat: d.cite, labels: monthsFrom(d.start, d.vals.length), series: d.vals.slice(), econ: { ...REAL_ECON[k] }, real: true, src: "Real public dataset" }; });
 }
 
-export function parseCSV(text: string): SkuItem[] {
+export interface ParseResult { items: SkuItem[]; warnings: string[]; error: string | null; }
+
+/* Parse a real-world sales CSV: comma/semicolon/tab delimited; daily, weekly, or
+   monthly rows; any of sku,date,units / date,units / bare units. Daily/weekly rows
+   are aggregated into calendar months; month gaps are zero-filled with a warning. */
+export function parseCSV(text: string): ParseResult {
+  const warnings: string[] = [];
   const lines = text.trim().split(/\r?\n/).filter((l) => l.trim());
-  if (!lines.length) return [];
+  if (!lines.length) return { items: [], warnings, error: "The file is empty." };
+
+  const delim = [",", ";", "\t"].reduce((a, b) => (lines[0].split(b).length > lines[0].split(a).length ? b : a));
+  const split = (l: string) => l.split(delim).map((c) => c.trim().replace(/^"|"$/g, ""));
+
   const head = lines[0].toLowerCase();
-  const hasHeader = /sku|date|month|unit|qty|sales|demand|product/.test(head);
-  const rows = (hasHeader ? lines.slice(1) : lines).map((l) => l.split(",").map((c) => c.trim().replace(/^"|"$/g, "")));
+  const hasHeader = /sku|date|month|week|period|unit|qty|sales|demand|product|item|style/.test(head);
+  const rows = (hasHeader ? lines.slice(1) : lines).map(split).filter((r) => r.some((c) => c !== ""));
+  if (!rows.length) return { items: [], warnings, error: "No data rows found under the header." };
+
   let skuCol = -1, dateCol = -1, valCol = -1;
   if (hasHeader) {
-    const h = lines[0].split(",").map((c) => c.trim().toLowerCase());
-    h.forEach((c, i) => {
+    split(lines[0]).map((c) => c.toLowerCase()).forEach((c, i) => {
       if (/sku|product|item|style/.test(c) && skuCol < 0) skuCol = i;
-      if (/date|month|period|week/.test(c) && dateCol < 0) dateCol = i;
+      if (/date|month|week|period/.test(c) && dateCol < 0) dateCol = i;
       if (/unit|qty|quantity|sales|demand|volume/.test(c) && valCol < 0) valCol = i;
     });
   }
-  const nc = rows[0] ? rows[0].length : 0;
+  const nc = rows[0].length;
   if (valCol < 0) valCol = nc - 1;
   if (nc >= 3) { if (skuCol < 0) skuCol = 0; if (dateCol < 0) dateCol = 1; }
   else if (nc === 2) { if (dateCol < 0) dateCol = 0; valCol = 1; }
-  else { valCol = 0; }
-  const groups: Record<string, { labels: string[]; series: number[] }> = {};
+  else { dateCol = -1; valCol = 0; }
+
+  // month key from a date string, or null if unparseable
+  const monthOf = (s: string): string | null => {
+    let m = s.match(/^(\d{4})[-/](\d{1,2})(?:[-/]\d{1,2})?$/);           // 2024-03, 2024-03-15, 2024/3
+    if (m) { const mo = +m[2]; return mo >= 1 && mo <= 12 ? m[1] + "-" + String(mo).padStart(2, "0") : null; }
+    m = s.match(/^(\d{1,2})[-/](?:\d{1,2})[-/](\d{4})$/);               // 3/15/2024 (US month-first)
+    if (m) { const mo = +m[1]; return mo >= 1 && mo <= 12 ? m[2] + "-" + String(mo).padStart(2, "0") : null; }
+    m = s.match(/^([A-Za-z]{3,9})[ -](\d{4})$/);                        // Mar 2024 / March-2024
+    if (m) { const mo = "janfebmaraprmayjunjulaugsepoctnovdec".indexOf(m[1].slice(0, 3).toLowerCase()) / 3; return mo >= 0 ? m[2] + "-" + String(mo + 1).padStart(2, "0") : null; }
+    return null;
+  };
+
+  type Bucket = Map<string, number>;                                     // month -> units
+  const bySku = new Map<string, { bucket: Bucket; seq: number[]; seqLabels: string[]; rowsSeen: number }>();
+  let badVals = 0, datedRows = 0;
   rows.forEach((r, idx) => {
-    const sku = skuCol >= 0 && nc >= 3 ? r[skuCol] : "Series";
-    const v = parseFloat(r[valCol]); if (isNaN(v)) return;
-    const date = dateCol >= 0 ? r[dateCol] : String(idx);
-    (groups[sku] = groups[sku] || { labels: [], series: [] });
-    groups[sku].labels.push(date); groups[sku].series.push(Math.max(0, v));
+    const sku = skuCol >= 0 && nc >= 3 ? r[skuCol] || "Series" : "Series";
+    const v = parseFloat((r[valCol] ?? "").replace(/[$,\s]/g, ""));
+    if (isNaN(v)) { badVals++; return; }
+    const g = bySku.get(sku) ?? { bucket: new Map<string, number>(), seq: [] as number[], seqLabels: [] as string[], rowsSeen: 0 };
+    g.rowsSeen++;
+    const mk = dateCol >= 0 ? monthOf(r[dateCol] ?? "") : null;
+    if (mk) { datedRows++; g.bucket.set(mk, (g.bucket.get(mk) ?? 0) + Math.max(0, v)); }
+    else { g.seq.push(Math.max(0, v)); g.seqLabels.push(dateCol >= 0 ? r[dateCol] : String(idx + 1)); }
+    bySku.set(sku, g);
   });
-  return Object.keys(groups).map((sku) => ({ id: "csv-" + sku, nm: sku, cat: "Uploaded · " + groups[sku].series.length + " periods", labels: groups[sku].labels, series: groups[sku].series, econ: { price: 100, unitCost: 45, salvage: 15 }, real: true, src: "Your data" }));
+  if (badVals) warnings.push(`${badVals} row${badVals > 1 ? "s" : ""} skipped (non-numeric units).`);
+  if (!bySku.size) return { items: [], warnings, error: "No numeric rows found. Expected columns like: sku, date, units." };
+
+  const nextMonth = (k: string) => { const [y, mo] = k.split("-").map(Number); return mo === 12 ? (y + 1) + "-01" : y + "-" + String(mo + 1).padStart(2, "0"); };
+  let gapsFilled = 0, aggregated = false;
+  const items: SkuItem[] = [...bySku.entries()].map(([sku, g]) => {
+    let labels: string[], series: number[];
+    if (g.bucket.size >= 2 && g.bucket.size >= g.seq.length) {
+      const keys = [...g.bucket.keys()].sort();
+      if (g.rowsSeen > g.bucket.size) aggregated = true;
+      labels = []; series = [];
+      for (let k = keys[0]; ; k = nextMonth(k)) {
+        labels.push(k);
+        if (g.bucket.has(k)) series.push(g.bucket.get(k)!); else { series.push(0); gapsFilled++; }
+        if (k === keys[keys.length - 1]) break;
+        if (labels.length > 600) break;                                  // runaway-gap guard
+      }
+    } else { labels = g.seqLabels; series = g.seq; }
+    return {
+      id: "csv-" + sku, nm: sku, cat: "Uploaded · " + series.length + " months",
+      labels, series, econ: { price: 100, unitCost: 45, salvage: 15 }, real: true, src: "Your data",
+    };
+  });
+  if (aggregated) warnings.push("Daily/weekly rows were aggregated into calendar months.");
+  if (gapsFilled) warnings.push(`${gapsFilled} missing month${gapsFilled > 1 ? "s" : ""} filled with 0 — check for data gaps.`);
+  if (datedRows === 0 && dateCol >= 0) warnings.push("Dates weren't recognized — rows were kept in file order.");
+  const short = items.filter((i) => i.series.length < 24);
+  if (short.length) warnings.push(`${short.length} SKU${short.length > 1 ? "s have" : " has"} under 24 months — forecasts will be weaker.`);
+  return { items, warnings, error: null };
 }
