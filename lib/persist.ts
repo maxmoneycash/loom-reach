@@ -11,6 +11,7 @@ export interface Persisted {
   econOverride: Record<string, Econ>;
   uploaded: SkuItem[] | null;
   selectedId: string | null;
+  sizes?: Record<string, number[]>;   // per-SKU size-curve weights
 }
 
 export function saveState(p: Persisted): void {

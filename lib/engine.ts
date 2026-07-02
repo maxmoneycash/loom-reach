@@ -153,6 +153,38 @@ export function backtest(series: number[], m: number, horizon: number, econ: Eco
   return { actualDemand, decisions, scored, plan, savedVsMean: scored.makeToMean.total - scored.newsvendor.total, savedVsLastPlus: scored.lastSeasonPlus10.total - scored.newsvendor.total };
 }
 
+/* operational risk profile of committing to quantity Q against a demand sample set */
+export interface Risk { pStockout: number; expLeftover: number; expShort: number; expCost: number; fillRate: number; }
+export function riskAt(Q: number, samples: number[], Cu: number, Co: number): Risk {
+  let over = 0, short = 0, stockouts = 0, sumD = 0;
+  for (let i = 0; i < samples.length; i++) {
+    const d = samples[i];
+    over += Math.max(0, Q - d); short += Math.max(0, d - Q);
+    if (d > Q) stockouts++; sumD += d;
+  }
+  const n = Math.max(samples.length, 1);
+  const meanD = sumD / n;
+  return {
+    pStockout: stockouts / n,
+    expLeftover: over / n,
+    expShort: short / n,
+    expCost: (Co * over + Cu * short) / n,
+    fillRate: meanD > 0 ? 1 - short / n / meanD : 1,
+  };
+}
+
+/* split a total into integer size-run quantities by weights (largest-remainder — sums exactly) */
+export function allocateSizes(total: number, weights: number[]): number[] {
+  const s = weights.reduce((a, b) => a + Math.max(0, b), 0);
+  if (s <= 0 || total <= 0) return weights.map(() => 0);
+  const raw = weights.map((w) => (total * Math.max(0, w)) / s);
+  const base = raw.map(Math.floor);
+  let rem = total - base.reduce((a, b) => a + b, 0);
+  const order = raw.map((r, i) => [r - base[i], i] as const).sort((a, b) => b[0] - a[0]);
+  for (let k = 0; rem > 0; k = (k + 1) % order.length, rem--) base[order[k][1]]++;
+  return base;
+}
+
 /* per-period prediction bands (charting only) */
 export function perStepBands(pointFc: number[], resid: number[], rng: () => number, n: number) {
   const cols: number[][] = pointFc.map(() => []);

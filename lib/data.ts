@@ -70,6 +70,10 @@ const APPAREL = [
   { id: "AN-LIN", nm: "Linen Camp Shirt", cat: "Seasonal · summer", price: 88, unitCost: 33, salvage: 10, g: genSku(44, N_MO, 780, 0.06, SHAPES.summer, 0.17, { priceBase: 88, promoLift: 0.45, elasticity: 1.3 }) },
   { id: "AN-SS", nm: "Tactical Softshell", cat: "Defense contract · lumpy", price: 320, unitCost: 140, salvage: 40, g: genSku(55, N_MO, 1100, 0.12, SHAPES.steady, 0.2, { priceBase: 320, intermittent: true }) },
   { id: "AN-HD", nm: "Limited-Run Hoodie", cat: "Trend · volatile", price: 96, unitCost: 36, salvage: 8, g: genSku(66, N_MO, 900, -0.1, SHAPES.holiday, 0.28, { priceBase: 96, promoLift: 0.7, elasticity: 1.4 }) },
+  { id: "AN-PK", nm: "Expedition Down Parka", cat: "Outerwear · deep winter", price: 480, unitCost: 210, salvage: 60, g: genSku(77, N_MO, 190, 0.22, SHAPES.winter, 0.22, { priceBase: 480, promoLift: 0.3, elasticity: 0.8 }) },
+  { id: "AN-SK", nm: "Trail Sock 3-Pack", cat: "Accessory · high volume", price: 24, unitCost: 7, salvage: 2, g: genSku(88, N_MO, 5200, 0.08, SHAPES.steady, 0.09, { priceBase: 24, promoLift: 0.9, elasticity: 1.8 }) },
+  { id: "AN-DR", nm: "Garment-Dyed Midi Dress", cat: "Seasonal · summer", price: 148, unitCost: 55, salvage: 18, g: genSku(99, N_MO, 520, 0.14, SHAPES.summer, 0.21, { priceBase: 148, promoLift: 0.5, elasticity: 1.25 }) },
+  { id: "AN-CP", nm: "Waxed Field Cap", cat: "Accessory · gift season", price: 42, unitCost: 15, salvage: 5, g: genSku(111, N_MO, 1400, 0.03, SHAPES.holiday, 0.24, { priceBase: 42, promoLift: 0.75, elasticity: 1.5 }) },
 ];
 
 export function loadApparel(): SkuItem[] {

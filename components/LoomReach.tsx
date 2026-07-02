@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Upload, TriangleAlert, Download, RotateCcw } from "lucide-react";
-import { newsvendor, quantile, avg, expectedCost, realizedCost, type Econ } from "@/lib/engine";
+import { newsvendor, quantile, avg, expectedCost, realizedCost, riskAt, allocateSizes, type Econ } from "@/lib/engine";
 import { runForecast, type ForecastResult } from "@/lib/forecast";
 import { loadApparel, loadReal, parseCSV, type SkuItem } from "@/lib/data";
 import { loadState, saveState, clearState } from "@/lib/persist";
@@ -93,6 +93,7 @@ export default function LoomReach() {
   const [horizon, setHorizon] = useState(12);
   const [econOverride, setEconOverride] = useState<Record<string, Econ>>({});
   const [upload, setUpload] = useState<{ error: string | null; warnings: string[]; okay: string | null }>({ error: null, warnings: [], okay: null });
+  const [sizes, setSizes] = useState<Record<string, number[]>>({});
   const hydrated = useRef(false);
 
   const econFor = (it: SkuItem): Econ => econOverride[it.id] || it.econ;
@@ -114,6 +115,7 @@ export default function LoomReach() {
       const idx = restored ? restored.findIndex((x) => x.id === p.selectedId) : -1;
       if (idx >= 0) setSelected(idx);
       if (p.econOverride) setEconOverride(p.econOverride);
+      if (p.sizes) setSizes(p.sizes);
       if (p.horizon >= 1 && p.horizon <= 24) setHorizon(p.horizon);
     }
     hydrated.current = true;
@@ -123,8 +125,8 @@ export default function LoomReach() {
   // persist session
   useEffect(() => {
     if (!hydrated.current) return;
-    saveState({ source, horizon, econOverride, uploaded: source === "upload" ? items : null, selectedId: items[selected]?.id ?? null });
-  }, [source, horizon, econOverride, items, selected]);
+    saveState({ source, horizon, econOverride, sizes, uploaded: source === "upload" ? items : null, selectedId: items[selected]?.id ?? null });
+  }, [source, horizon, econOverride, sizes, items, selected]);
 
   const compute = useMemo(() => {
     const map = new Map<string, Compute>();
@@ -288,14 +290,19 @@ export default function LoomReach() {
 
         {it && cm && (
           <div className="sheets reveal" key={it.id + ":" + horizon}>
-            <DecisionSheet it={it} plan={decide(cm.fc.samples, econFor(it))} horizon={horizon} />
+            <DecisionSheet it={it} plan={decide(cm.fc.samples, econFor(it))} horizon={horizon} samples={cm.fc.samples} />
             <Sheet no="02" name="Forecast" right={`${it.real ? "● real" : "○ illustrative"} · ${it.series.length}mo`}>
-              <ForecastChart it={it} fc={cm.fc} horizon={horizon} />
+              <div className="fcgrid">
+                <div><ForecastChart it={it} fc={cm.fc} horizon={horizon} /></div>
+                <div><Seasonality it={it} /><div className="fp-cap">seasonality fingerprint · monthly index</div></div>
+              </div>
             </Sheet>
             <BrainSheet fc={cm.fc} />
             {cm.fc.drivers.filter((d) => isFinite(d.coef)).length > 0 && <DriverSheet fc={cm.fc} />}
             <EconSheet it={it} econ={econFor(it)} horizon={horizon} onEcon={(k, v) => setEcon(it, k, v)} onHorizon={(v) => setHorizon(Math.max(1, Math.min(v, it.series.length - 2 * M)))} />
-            <Sheet no="06" name="Cost curve" right="why Q* is optimal"><CostCurveChart samples={cm.fc.samples} plan={decide(cm.fc.samples, econFor(it))} /></Sheet>
+            <RiskSheet key={"risk-" + it.id + ":" + horizon} samples={cm.fc.samples} plan={decide(cm.fc.samples, econFor(it))} />
+            <SizeSheet it={it} Qstar={decide(cm.fc.samples, econFor(it)).Qstar}
+              weights={sizes[it.id]} onWeights={(w) => setSizes((p) => ({ ...p, [it.id]: w }))} />
             <BacktestSheet it={it} cm={cm} econ={econFor(it)} horizon={horizon} score={scoreHoldout} />
             <Methodology />
           </div>
@@ -368,8 +375,9 @@ function PlanSheet({ items, compute, econFor, horizon, selected, onSelect, onRes
   );
 }
 
-function DecisionSheet({ it, plan, horizon }: { it: SkuItem; plan: Decision; horizon: number }) {
+function DecisionSheet({ it, plan, horizon, samples }: { it: SkuItem; plan: Decision; horizon: number; samples: number[] }) {
   const nv = plan.nv, save = plan.expectedCostMean - plan.expectedCostStar, buffer = plan.Qstar - plan.QtoMean;
+  const risk = riskAt(plan.Qstar, samples, nv.Cu, nv.Co);
   return (
     <Sheet no="01" name="Decision" right={it.nm}>
       <div className="hero">
@@ -377,6 +385,11 @@ function DecisionSheet({ it, plan, horizon }: { it: SkuItem; plan: Decision; hor
           <div className="lab">Cut for next {horizon}-mo season · newsvendor optimum</div>
           <div className="num">{fmt(plan.Qstar)} <small>units</small></div>
           <div className="dim"><span>mean {fmt(plan.QtoMean)}</span><span className="seg2" /><span style={{ color: "var(--signal-ink)" }}>{buffer >= 0 ? "+" : ""}{fmt(buffer)} buffer</span></div>
+          <div className="chips">
+            <div className="chip fill"><div className="cv">{(risk.fillRate * 100).toFixed(1)}%</div><div className="ck">fill rate</div></div>
+            <div className="chip risk"><div className="cv">{(risk.pStockout * 100).toFixed(0)}%</div><div className="ck">stockout risk</div></div>
+            <div className="chip left"><div className="cv">{fmt(risk.expLeftover)}</div><div className="ck">exp. leftover u</div></div>
+          </div>
           <div className="cmp">
             <div className="row"><span className="k">Make-to-forecast (mean)</span><span className="v">{fmt(plan.QtoMean)} u</span></div>
             <div className="row"><span className="k">Expected cost saved vs mean</span><span className="v" style={{ color: "var(--good)" }}>{money(save)}</span></div>
@@ -451,10 +464,18 @@ function DriverSheet({ fc }: { fc: ForecastResult }) {
 }
 
 function EconSheet({ it, econ, horizon, onEcon, onHorizon }: { it: SkuItem; econ: Econ; horizon: number; onEcon: (k: keyof Econ, v: number) => void; onHorizon: (v: number) => void; }) {
-  const field = (k: keyof Econ, label: string, pre: string) => (
-    <div className="f"><label htmlFor={"econ-" + k}>{label}</label><div className="inp"><span aria-hidden="true">{pre}</span>
-      <input id={"econ-" + k} type="number" min={0} step={1} value={econ[k]} onChange={(e) => onEcon(k, parseFloat(e.target.value))} inputMode="decimal" autoComplete="off" /></div></div>
-  );
+  const field = (k: keyof Econ, label: string, pre: string) => {
+    const hi = Math.max(Math.ceil(it.econ[k] * 2.5), Math.ceil(econ[k] * 1.2), 10);
+    const fill = Math.min(100, Math.max(0, (econ[k] / hi) * 100));
+    return (
+      <div className="f"><label htmlFor={"econ-" + k}>{label}</label><div className="inp"><span aria-hidden="true">{pre}</span>
+        <input id={"econ-" + k} type="number" min={0} step={1} value={econ[k]} onChange={(e) => onEcon(k, parseFloat(e.target.value))} inputMode="decimal" autoComplete="off" /></div>
+        <input className="slider" type="range" min={0} max={hi} step={1} value={econ[k]}
+          style={{ ["--fill" as string]: fill + "%" } as CSSProperties}
+          aria-label={label + " slider"} onChange={(e) => onEcon(k, parseFloat(e.target.value))} />
+      </div>
+    );
+  };
   return (
     <Sheet no="05" name="Economics" right="cost of being wrong">
       <p className="ph">These set Cu and Co — the only thing that separates the optimal quantity from a naive forecast.</p>
@@ -525,6 +546,138 @@ function BacktestSheet({ it, cm, econ, horizon, score }: { it: SkuItem; cm: Comp
         {nvWon ? (<><b>On this held-out season, Loom Reach was cheapest.</b> Actual demand was {fmt(bt.actual)} units; the newsvendor plan absorbed it with the least combined markdown + lost-margin cost.</>)
           : (<><b>On this single season, the naive plan happened to win.</b> Actual demand ({fmt(bt.actual)} u) landed below forecast, so the uncertainty buffer cost money here — expected, since newsvendor minimizes <em>expected</em> cost and wins across the portfolio, not every coin-flip. Shown honestly on purpose.</>)}
       </div>
+    </Sheet>
+  );
+}
+
+/* Radial seasonality fingerprint — the SKU's 12-month demand shape at a glance */
+function Seasonality({ it }: { it: SkuItem }) {
+  const start = (() => { const m = it.labels[0]?.match(/^(\d{4})-(\d{2})/); return m ? +m[2] - 1 : 0; })();
+  const sums = Array(12).fill(0), cnts = Array(12).fill(0);
+  it.series.forEach((v, i) => { const mo = (start + i) % 12; sums[mo] += v; cnts[mo]++; });
+  const overall = avg(it.series) || 1;
+  const idx = sums.map((s, m) => (cnts[m] ? s / cnts[m] / overall : 0));
+  const maxI = Math.max(1.6, ...idx) * 1.08;
+  const C = 110, R = 80;
+  const pt = (m: number, v: number): [number, number] => {
+    const a = -Math.PI / 2 + (m * 2 * Math.PI) / 12;
+    const rr = (Math.max(0, v) / maxI) * R;
+    return [C + rr * Math.cos(a), C + rr * Math.sin(a)];
+  };
+  const poly = idx.map((v, m) => pt(m, v).map((x) => x.toFixed(1)).join(",")).join(" ");
+  const peak = idx.indexOf(Math.max(...idx));
+  const MO = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
+  return (
+    <svg className="chart" viewBox="0 0 220 220" role="img"
+      aria-label={`Seasonality fingerprint for ${it.nm}: demand peaks in month ${peak + 1}`}>
+      {[0.5, 1.5].map((v) => <circle key={v} cx={C} cy={C} r={(v / maxI) * R} fill="none" stroke="var(--line-2)" strokeDasharray="2 3" />)}
+      <circle cx={C} cy={C} r={(1 / maxI) * R} fill="none" stroke="var(--line)" />
+      {MO.map((_, m) => { const [x, y] = pt(m, maxI); return <line key={m} x1={C} y1={C} x2={x} y2={y} stroke="var(--line-2)" />; })}
+      <polygon points={poly} fill="var(--signal)" fillOpacity={0.14} stroke="var(--signal)" strokeWidth={1.6} strokeLinejoin="round" />
+      {idx.map((v, m) => { const [x, y] = pt(m, v); return <circle key={m} cx={x} cy={y} r={m === peak ? 3.4 : 2} fill={m === peak ? "var(--signal)" : "var(--ink)"} />; })}
+      {MO.map((lab, m) => { const a = -Math.PI / 2 + (m * 2 * Math.PI) / 12; const x = C + (R + 13) * Math.cos(a), y = C + (R + 13) * Math.sin(a) + 3;
+        return <text key={m} x={x} y={y} textAnchor="middle" fontSize={9.5} fill={m === peak ? "var(--signal-ink)" : "var(--faint)"} fontFamily="var(--mono)" fontWeight={m === peak ? 600 : 400}>{lab}</text>; })}
+      <text x={C} y={C + (1 / maxI) * R - 5} textAnchor="middle" fontSize={7.5} fill="var(--faint)" fontFamily="var(--mono)">avg</text>
+    </svg>
+  );
+}
+
+/* Risk explorer — drag your cut quantity through the demand distribution and watch the consequences */
+function RiskSheet({ samples, plan }: { samples: number[]; plan: Decision }) {
+  const [Q, setQ] = useState(plan.Qstar);
+  const nv = plan.nv;
+  const lo = quantile(samples, 0.005), hi = quantile(samples, 0.995);
+  const clampQ = (q: number) => Math.round(Math.min(hi, Math.max(lo, q)));
+  const r = riskAt(Q, samples, nv.Cu, nv.Co);
+  const rStar = riskAt(plan.Qstar, samples, nv.Cu, nv.Co);
+  const penalty = r.expCost - rStar.expCost;
+  const atOpt = Math.abs(penalty) < Math.max(1, rStar.expCost * 0.002);
+
+  // histogram bins
+  const BINS = 36;
+  const counts = Array(BINS).fill(0);
+  for (const d of samples) { const b = Math.min(BINS - 1, Math.max(0, Math.floor(((d - lo) / (hi - lo || 1)) * BINS))); counts[b]++; }
+  const maxC = Math.max(...counts, 1);
+  const W = 720, Ht = 200, padL = 10, padR = 10, padT = 20, padB = 24;
+  const X = (q: number) => padL + ((q - lo) / (hi - lo || 1)) * (W - padL - padR);
+  const bw = (W - padL - padR) / BINS;
+  const YH = (c: number) => (c / maxC) * (Ht - padT - padB);
+
+  const qFrom = (e: React.PointerEvent<SVGSVGElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const vx = ((e.clientX - rect.left) / rect.width) * W;
+    return clampQ(lo + ((vx - padL) / (W - padL - padR)) * (hi - lo));
+  };
+
+  return (
+    <Sheet no="06" name="Risk explorer" right="drag the cut line">
+      <p className="ph">The winning model&apos;s 5,000 season-demand outcomes. Drag the orange line (or use the slider) to feel the trade-off — demand you cover vs. demand you miss.</p>
+      <svg className="chart risk-svg" viewBox={`0 0 ${W} ${Ht}`} role="img"
+        aria-label={`Demand distribution with adjustable cut quantity, currently ${fmt(Q)} units`}
+        onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); setQ(qFrom(e)); }}
+        onPointerMove={(e) => { if (e.buttons & 1) setQ(qFrom(e)); }}>
+        {counts.map((c, b) => {
+          const x0 = padL + b * bw, covered = x0 + bw / 2 <= X(Q);
+          return <rect key={b} x={x0 + 0.5} y={Ht - padB - YH(c)} width={bw - 1} height={YH(c)}
+            fill={covered ? "var(--blue)" : "var(--red)"} fillOpacity={covered ? 0.35 : 0.4} />;
+        })}
+        <line x1={X(plan.Qstar)} y1={padT - 4} x2={X(plan.Qstar)} y2={Ht - padB} stroke="var(--ink)" strokeWidth={1.2} strokeDasharray="4 3" />
+        <text x={X(plan.Qstar)} y={padT - 8} textAnchor="middle" fontSize={9} fill="var(--muted)" fontFamily="var(--mono)">Q* {fmt(plan.Qstar)}</text>
+        <line x1={X(Q)} y1={padT + 4} x2={X(Q)} y2={Ht - padB} stroke="var(--signal)" strokeWidth={2.4} />
+        <circle cx={X(Q)} cy={padT + 4} r={7} fill="var(--signal)" />
+        <circle cx={X(Q)} cy={padT + 4} r={2.6} fill="var(--surface)" />
+        <text x={padL} y={Ht - 8} fontSize={9} fill="var(--faint)" fontFamily="var(--mono)">{fmt(lo)}</text>
+        <text x={W - padR} y={Ht - 8} textAnchor="end" fontSize={9} fill="var(--faint)" fontFamily="var(--mono)">{fmt(hi)}</text>
+      </svg>
+      <div className="qrow">
+        <span className="qlab">your cut</span>
+        <input className="slider" type="range" min={Math.floor(lo)} max={Math.ceil(hi)} step={1} value={Q}
+          style={{ ["--fill" as string]: (((Q - lo) / (hi - lo || 1)) * 100).toFixed(1) + "%" } as CSSProperties}
+          aria-label="Simulated cut quantity" onChange={(e) => setQ(clampQ(parseInt(e.target.value)))} />
+        <span className="qval">{fmt(Q)} u</span>
+        <button className="snap" onClick={() => setQ(plan.Qstar)}>snap to Q*</button>
+      </div>
+      <div className="chips">
+        <div className="chip fill"><div className="cv">{(r.fillRate * 100).toFixed(1)}%</div><div className="ck">fill rate</div></div>
+        <div className="chip risk"><div className="cv">{(r.pStockout * 100).toFixed(0)}%</div><div className="ck">stockout risk</div></div>
+        <div className="chip left"><div className="cv">{fmt(r.expLeftover)}</div><div className="ck">exp. leftover u</div></div>
+        <div className="chip"><div className="cv">{money(r.expCost)}</div><div className="ck">exp. cost</div></div>
+      </div>
+      <div className={"deltacost" + (atOpt ? " opt" : "")} aria-live="polite">
+        {atOpt ? "✓ You're at the optimum — this is the cheapest quantity to commit to."
+          : <>Committing {fmt(Q)} u costs <b>{money(Math.abs(penalty))}</b> more than Q* in expectation ({Q > plan.Qstar ? "over-cutting → markdowns" : "under-cutting → lost sales"}).</>}
+      </div>
+      <CostCurveChart samples={samples} plan={plan} />
+    </Sheet>
+  );
+}
+
+/* Size-run cut sheet — split the cut into sizes the factory can cut against */
+const SIZE_NAMES = ["XS", "S", "M", "L", "XL", "2XL"];
+const DEFAULT_SIZE_W = [6, 20, 30, 25, 14, 5];
+function SizeSheet({ it, Qstar, weights, onWeights }: { it: SkuItem; Qstar: number; weights?: number[]; onWeights: (w: number[]) => void }) {
+  const w = weights && weights.length === SIZE_NAMES.length ? weights : DEFAULT_SIZE_W;
+  const units = allocateSizes(Qstar, w);
+  const maxU = Math.max(...units, 1);
+  const totW = w.reduce((a, b) => a + b, 0) || 1;
+  return (
+    <Sheet no="08" name="Size run" right={it.nm}>
+      <p className="ph">The cut split into a size run the factory can cut against. Edit the curve — integer allocation always sums exactly to the cut.</p>
+      <div className="sizehead"><span>size</span><span></span><span style={{ textAlign: "right" }}>curve %</span><span style={{ textAlign: "right" }}>units</span></div>
+      <div className="sizes">
+        {SIZE_NAMES.map((nm, i) => (
+          <div className="sizerow" key={nm}>
+            <span className="sz">{nm}</span>
+            <div className="sizebar"><i style={{ width: ((units[i] / maxU) * 100).toFixed(1) + "%" }} /></div>
+            <input type="number" min={0} step={1} value={Math.round((w[i] / totW) * 1000) / 10}
+              aria-label={`Size ${nm} share percent`} inputMode="decimal" autoComplete="off"
+              onChange={(e) => { const next = w.slice(); next[i] = Math.max(0, parseFloat(e.target.value) || 0); onWeights(next); }} />
+            <span className="units">{fmt(units[i])}</span>
+          </div>
+        ))}
+      </div>
+      <div className="sizefoot"><span>allocation check</span><span><b>{fmt(units.reduce((a, b) => a + b, 0))}</b> / {fmt(Qstar)} u</span></div>
+      <div className="actions"><button className="btn" onClick={() => onWeights(DEFAULT_SIZE_W)}><RotateCcw size={13} /> Standard curve</button></div>
     </Sheet>
   );
 }

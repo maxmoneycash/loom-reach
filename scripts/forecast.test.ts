@@ -1,6 +1,6 @@
 /* Headless validation of the forecasting brain. Run: npx tsx scripts/forecast.test.ts */
 import { runForecast, classifyDemand, type Drivers } from "../lib/forecast";
-import { makeRng, quantile, newsvendor } from "../lib/engine";
+import { makeRng, quantile, newsvendor, riskAt, allocateSizes } from "../lib/engine";
 import { REAL, loadApparel, parseCSV } from "../lib/data";
 
 let pass = 0, fail = 0;
@@ -95,6 +95,29 @@ ok("csv: garbage → clean error, no throw", p5.error !== null && p5.items.lengt
 
 const p6 = parseCSV("10\n20\n30\n40");
 ok("csv: bare single column still works", p6.items.length === 1 && p6.items[0].series.length === 4);
+
+/* ---- 8. risk metrics ---- */
+const sampl = [80, 90, 100, 110, 120];               // tiny known distribution
+const rk = riskAt(100, sampl, 60, 30);
+ok("risk: P(stockout) = 2/5 at Q=100", Math.abs(rk.pStockout - 0.4) < 1e-9, rk.pStockout.toFixed(2));
+ok("risk: exp leftover = (20+10)/5 = 6", Math.abs(rk.expLeftover - 6) < 1e-9, String(rk.expLeftover));
+ok("risk: exp short = (10+20)/5 = 6", Math.abs(rk.expShort - 6) < 1e-9, String(rk.expShort));
+ok("risk: exp cost = 30*6 + 60*6 = 540", Math.abs(rk.expCost - 540) < 1e-9, String(rk.expCost));
+ok("risk: fill rate = 1 - 6/100 = 0.94", Math.abs(rk.fillRate - 0.94) < 1e-9, rk.fillRate.toFixed(3));
+ok("risk: monotone — higher Q lowers stockout risk", riskAt(115, sampl, 60, 30).pStockout < rk.pStockout);
+
+/* ---- 9. size allocation (largest remainder) ---- */
+const alloc = allocateSizes(1000, [6, 20, 30, 25, 14, 5]);
+ok("sizes: sums exactly to total", alloc.reduce((a, b) => a + b, 0) === 1000, alloc.join(","));
+ok("sizes: proportions respected (M is largest)", alloc[2] === Math.max(...alloc));
+ok("sizes: zero weights get zero", allocateSizes(100, [0, 1, 0]).join(",") === "0,100,0");
+ok("sizes: awkward remainder still exact", allocateSizes(101, [1, 1, 1]).reduce((a, b) => a + b, 0) === 101, allocateSizes(101, [1, 1, 1]).join(","));
+ok("sizes: zero total → zeros", allocateSizes(0, [1, 2]).join(",") === "0,0");
+
+/* ---- 10. expanded catalog ---- */
+const cat = loadApparel();
+ok("catalog: 10 SKUs", cat.length === 10, cat.map((c) => c.id).join(","));
+ok("catalog: all have 48 months + drivers", cat.every((c) => c.series.length === 48 && !!c.drivers));
 
 console.log("\n--- champagne leaderboard (by MASE) ---");
 rc.candidates.forEach((c) => console.log(`  ${c.key.padEnd(8)} MASE ${c.mase.toFixed(3)}  WAPE ${(c.wape * 100).toFixed(1)}%  bias ${(c.bias * 100).toFixed(1)}%`));
