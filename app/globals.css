@@ -417,6 +417,12 @@ details.meth ul{margin:8px 0;padding-left:18px} details.meth li{margin:5px 0}
 .bartitle{font-family:var(--grotesk);font-weight:700;font-size:15px;letter-spacing:-.01em;min-width:0;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
+/* real-world grounding line on SKU screens */
+.story{display:block;font-size:12px;line-height:1.55;color:var(--muted);margin:2px 0 14px;
+  background:var(--surface-2);border:1px solid var(--line-2);border-radius:10px;padding:11px 13px;box-shadow:var(--sh-inset)}
+.story-tag{font-family:var(--mono);font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--signal-ink);
+  display:inline-block;margin-right:7px;border:1px solid color-mix(in oklch,var(--signal) 30%,white);border-radius:4px;padding:1px 6px;background:var(--signal-soft)}
+
 /* SKU switcher chips on detail screen */
 .skuchips{display:flex;gap:7px;overflow-x:auto;padding:2px 2px 10px;scroll-snap-type:x proximity;
   -webkit-overflow-scrolling:touch;scrollbar-width:none;overscroll-behavior-x:contain}

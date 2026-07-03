@@ -6,17 +6,17 @@ import NumberFlow from "@number-flow/react";
 import { Drawer } from "vaul";
 import {
   Upload, TriangleAlert, Download, RotateCcw, ChevronLeft,
-  ClipboardList, Database, BookOpen, Layers, ShoppingBag, ArrowUpRight,
+  ClipboardList, Database, BookOpen, Layers, ShoppingBag, ArrowUpRight, Shield, Shirt,
 } from "lucide-react";
 import { newsvendor, quantile, avg, expectedCost, realizedCost, riskAt, allocateSizes, makeRng, type Econ } from "@/lib/engine";
 import { runForecast, type ForecastResult } from "@/lib/forecast";
-import { loadApparel, loadReal, parseCSV, type SkuItem } from "@/lib/data";
+import { loadApparel, loadReal, loadDefense, loadDtc, parseCSV, type SkuItem } from "@/lib/data";
 import { loadState, saveState, clearState } from "@/lib/persist";
 import { simulateQR, levelRatios } from "@/lib/quickresponse";
 import { allocateCapacity } from "@/lib/capacity";
 
 const M = 12;
-type Source = "apparel" | "real" | "upload";
+type Source = "apparel" | "real" | "upload" | "defense" | "dtc";
 type Tab = "plan" | "data" | "method";
 interface View { tab: Tab; sku: string | null; }
 
@@ -261,8 +261,10 @@ function DecisionSheet({ it, plan, horizon, samples }: { it: SkuItem; plan: Deci
           <div className="lab">for the next {horizon}-month season</div>
           <div className="num"><NumberFlow value={plan.Qstar} format={INT} /> <small>units</small></div>
           <p className="answer">
-            That&apos;s the typical forecast <b>plus {fmt(Math.abs(buffer))} {buffer >= 0 ? "extra" : "fewer"}</b> — because for this product,
-            a missed sale hurts <b>{isFinite(ratio) ? ratio.toFixed(1) + "×" : "far"} more</b> than an unsold unit.
+            That&apos;s the typical forecast <b>{buffer >= 0 ? "plus" : "minus"} {fmt(Math.abs(buffer))} units</b> — because for this product,
+            {ratio >= 1
+              ? <>a missed sale hurts <b>{isFinite(ratio) ? ratio.toFixed(1) + "×" : "far"} more</b> than an unsold unit.</>
+              : <>an unsold unit hurts <b>{(1 / Math.max(ratio, 1e-9)).toFixed(1)}× more</b> than a missed sale.</>}
             Planned this way, you&apos;d fully serve <span className="good">{Math.round(risk.fillRate * 1000) / 10}%</span> of likely demand
             and save <span className="good">~{money(save)}</span> vs. just making the forecast.
           </p>
@@ -484,7 +486,8 @@ function RiskSheet({ samples, plan }: { samples: number[]; plan: Decision }) {
 const SIZE_NAMES = ["XS", "S", "M", "L", "XL", "2XL"];
 const DEFAULT_SIZE_W = [6, 20, 30, 25, 14, 5];
 function SizeSheet({ it, Qstar, weights, onWeights }: { it: SkuItem; Qstar: number; weights?: number[]; onWeights: (w: number[]) => void }) {
-  const w = weights && weights.length === SIZE_NAMES.length ? weights : DEFAULT_SIZE_W;
+  const w = weights && weights.length === SIZE_NAMES.length ? weights
+    : it.sizeW && it.sizeW.length === SIZE_NAMES.length ? it.sizeW : DEFAULT_SIZE_W;
   const units = allocateSizes(Qstar, w);
   const maxU = Math.max(...units, 1);
   const totW = w.reduce((a, b) => a + b, 0) || 1;
@@ -580,7 +583,8 @@ function QRSheet({ it, fc, econ }: { it: SkuItem; fc: ForecastResult; econ: Econ
       <div className="mt">
         This is the economics of &quot;weeks-not-months&quot; lead times: reads are only worth money because demand has a persistent
         hit-or-miss component — estimated here from realized year-over-year deviations{qr.lambdaN < 3 ? " (few observed years: treat as indicative)" : ""}.
-        Offshore lead times can&apos;t use the reads; a fast factory can.
+        Offshore lead times can&apos;t use the reads; a fast factory can. Real-world context: Zara commits just 15–20% of a season
+        before it starts (industry: 45–60%), and Sport Obermeyer&apos;s early-read program lifted profits 50–100% (Fisher–Raman, HBR 1994).
       </div>
     </Sheet>
   );
@@ -792,6 +796,7 @@ function SkuScreen({ it, cm, items, econ, horizon, sizes, onEcon, onHorizon, onS
           <button key={s.id} role="tab" aria-selected={s.id === it.id} className={"skuchip" + (s.id === it.id ? " on" : "")} onClick={() => switchSku(s.id)}>{s.nm}</button>
         ))}
       </div>
+      {it.story && <p className="story"><span className="story-tag">grounded in</span> {it.story}</p>}
       <div className="sheets">
         <DecisionSheet it={it} plan={plan} horizon={horizon} samples={cm.fc.samples} />
         <Sheet no="02" name="What will sell" right={`${it.real ? "● real" : "○ illustrative"} · ${it.series.length}mo`}>
@@ -827,7 +832,7 @@ function SkuScreen({ it, cm, items, econ, horizon, sizes, onEcon, onHorizon, onS
 
 function DataScreen({ source, items, upload, onPick, onFile, onReset }: {
   source: Source; items: SkuItem[]; upload: { error: string | null; warnings: string[]; okay: string | null };
-  onPick: (kind: "apparel" | "real" | "shopify") => void; onFile: (e: React.ChangeEvent<HTMLInputElement>) => void; onReset: () => void;
+  onPick: (kind: "apparel" | "real" | "shopify" | "defense" | "dtc") => void; onFile: (e: React.ChangeEvent<HTMLInputElement>) => void; onReset: () => void;
 }) {
   return (
     <div className="screen">
@@ -840,6 +845,16 @@ function DataScreen({ source, items, upload, onPick, onFile, onReset }: {
           <span className="ic"><Layers size={17} /></span>
           <span><span className="dn">Apparel catalog</span><span className="dd" style={{ display: "block" }}>10 illustrative SKUs with seasonality, promo &amp; price drivers — labeled sample data.</span></span>
           <span className="go">{source === "apparel" && items.length ? "active" : "load →"}</span>
+        </button>
+        <button className={"datacard" + (source === "defense" ? " on" : "")} onClick={() => onPick("defense")}>
+          <span className="ic"><Shield size={17} /></span>
+          <span><span className="dn">Defense programs</span><span className="dd" style={{ display: "block" }}>5 SKUs modeled on real DLA &amp; SOCOM situations — option-year gambles, surge orders, size tariffs. Each cites its source.</span></span>
+          <span className="go">{source === "defense" && items.length ? "active" : "load →"}</span>
+        </button>
+        <button className={"datacard" + (source === "dtc" ? " on" : "")} onClick={() => onPick("dtc")}>
+          <span className="ic"><Shirt size={17} /></span>
+          <span><span className="dn">DTC brand stories</span><span className="dd" style={{ display: "block" }}>4 SKUs modeled on documented gluts &amp; sellouts — the FIGS cliff, Allbirds&apos; miss, the Old Navy size-curve failure.</span></span>
+          <span className="go">{source === "dtc" && items.length ? "active" : "load →"}</span>
         </button>
         <button className={"datacard" + (source === "real" ? " on" : "")} onClick={() => onPick("real")}>
           <span className="ic"><Database size={17} /></span>
@@ -937,6 +952,8 @@ export default function LoomReach() {
         setSource("upload"); setItems(p.uploaded);
         setUpload({ error: null, warnings: [], okay: p.uploaded.length + " SKU" + (p.uploaded.length > 1 ? "s" : "") + " restored from your last session." });
       } else if (p.source === "real") { setSource("real"); setItems(loadReal()); }
+      else if (p.source === "defense") { setSource("defense"); setItems(loadDefense()); }
+      else if (p.source === "dtc") { setSource("dtc"); setItems(loadDtc()); }
       if (p.econOverride) setEconOverride(p.econOverride);
       if (p.sizes) setSizes(p.sizes);
       if (p.horizon >= 1 && p.horizon <= 24) setHorizon(p.horizon);
@@ -1008,7 +1025,7 @@ export default function LoomReach() {
   function switchSource(s: Source) {
     setSource(s); setEconOverride({}); setHorizon(12);
     setUpload({ error: null, warnings: [], okay: null });
-    setItems(s === "apparel" ? loadApparel() : s === "real" ? loadReal() : []);
+    setItems(s === "apparel" ? loadApparel() : s === "real" ? loadReal() : s === "defense" ? loadDefense() : s === "dtc" ? loadDtc() : []);
   }
   function applyIngest(items2: SkuItem[], warnings: string[], src: string) {
     const longest = Math.max(...items2.map((i) => i.series.length));
@@ -1025,7 +1042,7 @@ export default function LoomReach() {
       applyIngest(data.items, data.warnings, srcLabel);
     } catch (err) { setUpload({ error: "Ingestion failed: " + (err as Error).message, warnings: [], okay: null }); }
   }
-  function onPickData(kind: "apparel" | "real" | "shopify") {
+  function onPickData(kind: "apparel" | "real" | "shopify" | "defense" | "dtc") {
     vib(6);
     if (kind === "shopify") {
       void (async () => {

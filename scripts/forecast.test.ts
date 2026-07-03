@@ -1,7 +1,7 @@
 /* Headless validation of the forecasting brain. Run: npx tsx scripts/forecast.test.ts */
 import { runForecast, classifyDemand, type Drivers } from "../lib/forecast";
 import { makeRng, quantile, newsvendor, riskAt, allocateSizes } from "../lib/engine";
-import { REAL, loadApparel, parseCSV } from "../lib/data";
+import { REAL, loadApparel, loadDefense, loadDtc, parseCSV } from "../lib/data";
 
 let pass = 0, fail = 0;
 const ok = (name: string, cond: boolean, extra = "") => { if (cond) pass++; else fail++; console.log((cond ? "PASS " : "FAIL ") + name + (extra ? "  " + extra : "")); };
@@ -202,6 +202,22 @@ for (let qa = 0; qa <= capN; qa++) {
 ok("cap: matches brute-force optimum (±2 u, ±0.5% profit)",
    Math.abs((opt.alloc[0].q) - bestQa) <= 2 && opt.profitOptimal >= best * 0.995,
    `greedy A=${opt.alloc[0].q} brute A=${bestQa} · $${Math.round(opt.profitOptimal)} vs $${Math.round(best)}`);
+
+/* ---- 14. grounded catalogs ---- */
+const dfns = loadDefense();
+ok("defense: 5 SKUs, all with stories", dfns.length === 5 && dfns.every((d) => !!d.story && d.series.length === 48), dfns.map((d) => d.id).join(","));
+const spk = dfns.find((d) => d.id === "DL-SPK")!;
+ok("defense: SOCOM pack demand is intermittent/lumpy", ["intermittent", "lumpy"].includes(classifyDemand(spk.series).label), classifyDemand(spk.series).label);
+const ihw = dfns.find((d) => d.id === "DL-IHW")!;
+const yr1 = ihw.series.slice(0, 24).reduce((a, b) => a + b, 0) / 24, yr3 = ihw.series.slice(24).reduce((a, b) => a + b, 0) / 24;
+ok("defense: IHWCU option-year plus-up visible (~35%)", yr3 / yr1 > 1.2 && yr3 / yr1 < 1.6, (yr3 / yr1).toFixed(2) + "×");
+ok("defense: government lines have flat pricing (no markdown month)", new Set(ihw.drivers!.price).size === 1);
+const dtc2 = loadDtc();
+ok("dtc: 4 SKUs, all with stories", dtc2.length === 4 && dtc2.every((d) => !!d.story), dtc2.map((d) => d.id).join(","));
+const scr = dtc2.find((d) => d.id === "DC-SCR")!;
+const scrEarly = scr.series.slice(12, 20).reduce((a, b) => a + b, 0) / 8, scrLate = scr.series.slice(22, 30).reduce((a, b) => a + b, 0) / 8;
+ok("dtc: scrub top shows the demand cliff", scrLate < scrEarly * 0.85, (scrLate / scrEarly).toFixed(2) + "×");
+ok("dtc: Old Navy-style SKU carries a flat default size curve", (dtc2.find((d) => d.id === "DC-BPD")!.sizeW ?? [])[0] === 14);
 
 console.log("\n--- champagne leaderboard (by MASE) ---");
 rc.candidates.forEach((c) => console.log(`  ${c.key.padEnd(8)} MASE ${c.mase.toFixed(3)}  WAPE ${(c.wape * 100).toFixed(1)}%  bias ${(c.bias * 100).toFixed(1)}%`));

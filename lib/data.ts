@@ -4,6 +4,8 @@ import type { Drivers } from "./forecast";
 export interface SkuItem {
   id: string; nm: string; cat: string; labels: string[]; series: number[];
   econ: Econ; real: boolean; src: string; drivers?: Drivers;
+  story?: string;          // one-line real-world grounding, shown in the SKU screen
+  sizeW?: number[];        // default size-curve weights (e.g. a deliberately broken curve)
 }
 
 /* ---- REAL public demand series (fetched verbatim; classic published datasets) ---- */
@@ -39,7 +41,7 @@ export function monthsFrom(start: string, n: number): string[] {
    driver-regression model has genuine signal to find. ---- */
 interface Gen { series: number[]; price: number[]; promo: number[]; }
 function genSku(seed: number, n: number, base: number, trendPerYr: number, shape: number[], noise: number,
-  opts: { priceBase: number; promoLift?: number; elasticity?: number; intermittent?: boolean }): Gen {
+  opts: { priceBase: number; promoLift?: number; elasticity?: number; intermittent?: boolean; noMarkdown?: boolean; stepAt?: number; stepMul?: number }): Gen {
   const rng = makeRng(seed);
   const promoLift = opts.promoLift ?? 0.5, elasticity = opts.elasticity ?? 1.1;
   const promoSet = new Set<number>();
@@ -47,11 +49,12 @@ function genSku(seed: number, n: number, base: number, trendPerYr: number, shape
   const series: number[] = [], price: number[] = [], promo: number[] = [];
   for (let i = 0; i < n; i++) {
     const mo = i % 12, s = shape[mo], tr = 1 + trendPerYr * (i / 12);
-    const pr = mo === 7 ? opts.priceBase * 0.75 : opts.priceBase; // mid-year clearance markdown
+    const pr = !opts.noMarkdown && mo === 7 ? opts.priceBase * 0.75 : opts.priceBase; // mid-year clearance markdown
     price.push(Math.round(pr));
     const isP = promoSet.has(i) ? 1 : 0; promo.push(isP);
-    let v = base * s * tr * (1 + (rng() - 0.5) * noise) * (1 + promoLift * isP) * Math.pow(opts.priceBase / pr, elasticity);
-    if (opts.intermittent && rng() > 0.28) v = 0; // sparse, lumpy demand (defense contract cadence)
+    const lvl = opts.stepAt != null && i >= opts.stepAt ? (opts.stepMul ?? 1) : 1;   // e.g. option-year plus-up or demand cliff
+    let v = base * s * tr * lvl * (1 + (rng() - 0.5) * noise) * (1 + promoLift * isP) * Math.pow(opts.priceBase / pr, elasticity);
+    if (opts.intermittent && rng() > 0.28) v = 0; // sparse, lumpy demand (contract cadence)
     series.push(Math.max(0, Math.round(v)));
   }
   return { series, price, promo };
@@ -83,6 +86,52 @@ export function loadApparel(): SkuItem[] {
     drivers: { price: a.g.price, promo: a.g.promo },
   }));
 }
+/* ---- GROUNDED catalogs: illustrative demand, but every SKU is modeled on a
+   cited real program or public filing (see docs/research-grounding.md). ---- */
+const DEFENSE = [
+  { id: "DL-IHW", nm: "Hot-Weather Combat Coat", cat: "DLA IDIQ · steady + option years", price: 78, unitCost: 70, salvage: 8,
+    g: genSku(211, N_MO, 19500, 0.02, SHAPES.steady, 0.1, { priceBase: 78, promoLift: 0, elasticity: 0, noMarkdown: true, stepAt: 24, stepMul: 1.35 }),
+    story: "Modeled on DLA's 2021 solicitation: ~240,000 hot-weather uniforms a year at ~$150/set on a 5-year IDIQ — option-year quantities are the gamble. FFP margins run 8–12%." },
+  { id: "DL-SPK", nm: "Assault Pack (SOCOM channel)", cat: "Surge orders · lumpy", price: 420, unitCost: 290, salvage: 80,
+    g: genSku(222, N_MO, 9000, 0.05, SHAPES.steady, 0.3, { priceBase: 420, promoLift: 0, elasticity: 0, noMarkdown: true, intermittent: true }),
+    story: "Modeled on USSOCOM SPEAR pack buys through the $33B SOE TLS vehicle — near-zero baseline, then episodic 5–10k-unit delivery orders (Soldier Systems, 2016/2021)." },
+  { id: "DL-FRB", nm: "FR Base Layer (Safe-to-Fly)", cat: "Certified · no substitution", price: 95, unitCost: 52, salvage: 30,
+    g: genSku(233, N_MO, 950, 0.08, SHAPES.winter, 0.18, { priceBase: 95, promoLift: 0, elasticity: 0, noMarkdown: true }),
+    story: "Modeled on DRIFIRE / Massif Berry-compliant FR layers: aircrew certification bars substitution, so a forecast miss is a stockout — it can't be papered over with another vendor." },
+  { id: "DL-AWC", nm: "All-Weather Coat (Selma line)", cat: "Small contractor · seasonal", price: 62, unitCost: 55, salvage: 6,
+    g: genSku(244, N_MO, 2400, 0.03, SHAPES.winter, 0.15, { priceBase: 62, promoLift: 0, elasticity: 0, noMarkdown: true }),
+    story: "Modeled on American Apparel Inc.'s (Selma, AL) $31.7M DLA all-weather coat IDIQ (Nov 2023) — one plant, several concurrent lines, fabric committed before option years are exercised." },
+  { id: "DT-FSR", nm: "FSR Crew Kit (defense-tech)", cat: "Tiny volumes · fast turns", price: 180, unitCost: 95, salvage: 25,
+    g: genSku(255, N_MO, 140, 0.15, SHAPES.steady, 0.25, { priceBase: 180, promoLift: 0, elasticity: 0, noMarkdown: true }),
+    story: "Illustrative: field-service crew kit for a defense-tech firm (Epirus-style) — a handful of sizes, 4-week turns. Modeled, not a claimed relationship." },
+];
+const DTC = [
+  { id: "DC-SCR", nm: "Performance Scrub Top", cat: "Glut regime · demand cliff", price: 38, unitCost: 14, salvage: 5,
+    g: genSku(311, N_MO, 3200, -0.06, SHAPES.steady, 0.14, { priceBase: 38, promoLift: 0.5, elasticity: 1.3, stepAt: 20, stepMul: 0.7 }),
+    story: "Modeled on FIGS 2022: inventory ordered into the boom landed as demand normalized — storage costs alone added 2.5pts of revenue to selling expense (SEC Q3 2022 8-K)." },
+  { id: "DC-WRA", nm: "Wool Apparel Line", cat: "New category · fading", price: 98, unitCost: 42, salvage: 12,
+    g: genSku(322, N_MO, 1400, -0.35, SHAPES.steady, 0.3, { priceBase: 98, promoLift: 0.6, elasticity: 1.4 }),
+    story: "Modeled on Allbirds' 2022 apparel expansion: a new category with no history missed hard — $11.6M written down in one quarter (SEC 8-K, Aug 2022)." },
+  { id: "DC-ALN", nm: "Studio Legging", cat: "Sellout regime · hero product", price: 118, unitCost: 46, salvage: 20,
+    g: genSku(333, N_MO, 2100, 0.3, SHAPES.steady, 0.15, { priceBase: 118, promoLift: 0.35, elasticity: 1.1 }),
+    story: "Modeled on Lululemon 2013: a recall pulled ~17% of bottoms and the hero product sold out for months — the understock side of the same coin (corporate.lululemon.com)." },
+  { id: "DC-BPD", nm: "Inclusive-Sizing Denim", cat: "Size-curve risk", price: 89, unitCost: 34, salvage: 11,
+    g: genSku(344, N_MO, 1800, 0.06, SHAPES.holiday, 0.18, { priceBase: 89, promoLift: 0.5, elasticity: 1.3 }),
+    sizeW: [14, 19, 24, 19, 13, 11],
+    story: "Modeled on Old Navy's 2022 BODEQUALITY rollout: extended sizes over-bought while core sizes stocked out — merch margin fell ~5pts (SEC Q2 2022). The size curve below starts flat, like theirs did. Fix it." },
+];
+
+function toItems(list: typeof DEFENSE, src: string): SkuItem[] {
+  return list.map((a) => ({
+    id: a.id, nm: a.nm, cat: a.cat, labels: monthsFrom(START, N_MO), series: a.g.series,
+    econ: { price: a.price, unitCost: a.unitCost, salvage: a.salvage }, real: false, src,
+    drivers: { price: a.g.price, promo: a.g.promo },
+    story: a.story, sizeW: (a as { sizeW?: number[] }).sizeW,
+  }));
+}
+export function loadDefense(): SkuItem[] { return toItems(DEFENSE, "Grounded sample · defense"); }
+export function loadDtc(): SkuItem[] { return toItems(DTC, "Grounded sample · DTC"); }
+
 export function loadReal(): SkuItem[] {
   return Object.keys(REAL).map((k) => { const d = REAL[k]; return { id: k, nm: d.name, cat: d.cite, labels: monthsFrom(d.start, d.vals.length), series: d.vals.slice(), econ: { ...REAL_ECON[k] }, real: true, src: "Real public dataset" }; });
 }
