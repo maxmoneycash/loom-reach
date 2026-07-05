@@ -417,6 +417,21 @@ details.meth ul{margin:8px 0;padding-left:18px} details.meth li{margin:5px 0}
 .bartitle{font-family:var(--grotesk);font-weight:700;font-size:15px;letter-spacing:-.01em;min-width:0;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
+/* ---------- topic list: opt-in reading, not a wall ---------- */
+.topics{margin-top:6px}
+.topics-cap{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);padding:4px 2px 8px}
+.topic{border-bottom:1px solid var(--line)}
+.topic:first-of-type{border-top:1px solid var(--line)}
+.topic-head{display:flex;align-items:center;gap:12px;width:100%;background:none;border:0;padding:15px 4px;text-align:left;min-height:58px}
+.topic-head:active{background:var(--surface-2)}
+.topic-head .tq{font-family:var(--grotesk);font-weight:600;font-size:15px;color:var(--ink);line-height:1.25}
+.topic-head .tt{display:block;font-family:var(--sans);font-weight:400;font-size:11.5px;color:var(--faint);margin-top:3px}
+.topic-head .tic{margin-left:auto;color:var(--signal-ink);flex:0 0 auto;transition:transform .22s cubic-bezier(.16,1,.3,1);
+  width:28px;height:28px;border:1px solid var(--line);border-radius:50%;display:grid;place-items:center;background:var(--surface);box-shadow:var(--sh-1)}
+.topic.open .tic{transform:rotate(45deg);color:var(--surface);background:var(--signal);border-color:var(--signal)}
+.topic-body{padding:2px 0 18px}
+.topic-body .sheet{box-shadow:none;border-style:dashed}
+
 /* real-world grounding line on SKU screens */
 .story{display:block;font-size:12px;line-height:1.55;color:var(--muted);margin:2px 0 14px;
   background:var(--surface-2);border:1px solid var(--line-2);border-radius:10px;padding:11px 13px;box-shadow:var(--sh-inset)}

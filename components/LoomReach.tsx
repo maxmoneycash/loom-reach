@@ -6,7 +6,7 @@ import NumberFlow from "@number-flow/react";
 import { Drawer } from "vaul";
 import {
   Upload, TriangleAlert, Download, RotateCcw, ChevronLeft,
-  ClipboardList, Database, BookOpen, Layers, ShoppingBag, ArrowUpRight, Shield, Shirt,
+  ClipboardList, Database, BookOpen, Layers, ShoppingBag, ArrowUpRight, Shield, Shirt, Plus,
 } from "lucide-react";
 import { newsvendor, quantile, avg, expectedCost, realizedCost, riskAt, allocateSizes, makeRng, type Econ } from "@/lib/engine";
 import { runForecast, type ForecastResult } from "@/lib/forecast";
@@ -265,8 +265,7 @@ function DecisionSheet({ it, plan, horizon, samples }: { it: SkuItem; plan: Deci
             {ratio >= 1
               ? <>a missed sale hurts <b>{isFinite(ratio) ? ratio.toFixed(1) + "×" : "far"} more</b> than an unsold unit.</>
               : <>an unsold unit hurts <b>{(1 / Math.max(ratio, 1e-9)).toFixed(1)}× more</b> than a missed sale.</>}
-            Planned this way, you&apos;d fully serve <span className="good">{Math.round(risk.fillRate * 1000) / 10}%</span> of likely demand
-            and save <span className="good">~{money(save)}</span> vs. just making the forecast.
+            Expect to serve <span className="good">{Math.round(risk.fillRate * 100)}%</span> of demand and keep <span className="good">~{money(save)}</span> that a plain forecast would lose.
           </p>
           <div className="chips">
             <div className="chip fill"><div className="cv">{(risk.fillRate * 100).toFixed(1)}%</div><div className="ck">demand served</div></div>
@@ -423,8 +422,7 @@ function RiskSheet({ samples, plan }: { samples: number[]; plan: Decision }) {
   return (
     <Sheet no="06" name="What if you cut more — or less" right="drag the orange line">
       <p className="answer">
-        Each bar is how often that level of demand happens across 5,000 simulated seasons. Everything <b>left</b> of the
-        orange line you can serve; everything <b>right</b> of it you&apos;d miss. Drag it and feel the trade-off.
+        Every bar is a possible season. Left of the orange line: sales you make. Right: sales you miss. <b>Drag it.</b>
       </p>
       <svg className="chart risk-svg" viewBox={`0 0 ${W} ${Ht}`} role="img"
         aria-label={`Demand distribution with adjustable cut quantity, currently ${fmt(Q)} units`}
@@ -493,7 +491,7 @@ function SizeSheet({ it, Qstar, weights, onWeights }: { it: SkuItem; Qstar: numb
   const totW = w.reduce((a, b) => a + b, 0) || 1;
   return (
     <Sheet no="08" name="Which sizes to cut" right={it.nm}>
-      <p className="ph">The cut split into a size run the factory can cut against. Edit the curve — integer allocation always sums exactly to the cut.</p>
+      <p className="answer">Your cut, split into sizes the factory can work from. Edit the percentages — units always add up exactly.</p>
       <div className="sizehead"><span>size</span><span></span><span style={{ textAlign: "right" }}>curve %</span><span style={{ textAlign: "right" }}>units</span></div>
       <div className="sizes">
         {SIZE_NAMES.map((nm, i) => (
@@ -528,9 +526,7 @@ function QRSheet({ it, fc, econ }: { it: SkuItem; fc: ForecastResult; econ: Econ
   return (
     <Sheet no="09" name="What speed is worth" right="why short lead times win">
       <p className="ph">
-        The bet behind domestic manufacturing: commit a lean first cut, watch the first {k} month{k > 1 ? "s" : ""} of real
-        sales, then re-cut at short lead time once you know if it&apos;s a hit. This simulates both strategies over 1,200
-        seasons whose hit-or-miss factor is estimated from this SKU&apos;s own {qr.lambdaN} observed year{qr.lambdaN > 1 ? "s" : ""}.
+        Cut a little now. Watch {k} month{k > 1 ? "s" : ""} of real sales. Then re-cut fast, knowing if it&apos;s a hit. Simulated over 1,200 seasons of this product&apos;s own ups and downs.
       </p>
       <div className="qrhead">
         <span className={"big" + (pos ? "" : " neg")}>
@@ -599,7 +595,7 @@ function BacktestSheet({ it, cm, econ, horizon, score }: { it: SkuItem; cm: Comp
   const nvWon = bt.scored.newsvendor.total <= bt.scored.makeToMean.total;
   return (
     <Sheet no="07" name="Did it actually work" right={`held-out ${horizon}mo`}>
-      <p className="ph">Train the whole brain on history up to the last season, decide a quantity, then score each strategy against what actually sold.</p>
+      <p className="answer">We hid the last season, planned for it, then checked what really sold.</p>
       <div className="btbars">
         {rows.map(([k, lab]) => {
           const sc = bt.scored[k], w = (sc.total / maxCost) * 100;
@@ -658,7 +654,7 @@ function CapacitySheet({ rows }: { rows: { it: SkuItem; samples: number[]; econ:
   const byId = new Map(res.alloc.map((a) => [a.id, a]));
   return (
     <Sheet no="0C" name="Who gets the machines" right="who gets the machines">
-      <p className="ph">When capacity is scarce, pro-rata cuts everything equally — the optimal split gives scarce units to the SKUs whose next unit earns the most. Drag the capacity down and watch the allocation defend margin.</p>
+      <p className="answer">Not enough machine time for everything? Drag capacity down and watch it protect the products that earn the most.</p>
       <div className="qrctl" style={{ gridTemplateColumns: "1fr" }}>
         <div className="f">
           <label htmlFor="cap-sl">Season capacity <b>{fmt(cap)} u · {capPct}% of plan</b></label>
@@ -727,19 +723,8 @@ function PlanScreen({ items, compute, econFor, horizon, portfolio, openSku }: {
     <div className="screen">
       <section className="intro" style={{ padding: "4px 2px 12px" }}>
         <h1>How many do you <em>actually</em> make?</h1>
-        <p>Cross-validated forecasts, priced uncertainty, and the cut quantity that minimizes the cost of being wrong — for every SKU.</p>
+        <p>One number per product. Tap any product to see how its number is made.</p>
       </section>
-      {showRoll && (
-        <div className="summary">
-          <div className="strip"><span>Portfolio backtest — rolling held-out seasons</span><span className="r">{portfolio.wins}/{portfolio.n} improved</span></div>
-          <div className="body">
-            <span className="big" style={portfolio.savedVsMean < 0 ? { color: "var(--red)" } : undefined}>
-              <NumberFlow value={Math.round(Math.abs(portfolio.savedVsMean))} format={INT} prefix={portfolio.savedVsMean < 0 ? "-$" : "$"} /> saved
-            </span>
-            <span className="txt">vs. make-to-forecast across <b>{portfolio.n}</b> held-out seasons ({items.length} SKUs × rolling origins). Newsvendor wins at portfolio scale, not on every one — it minimizes <b>expected</b> cost.</span>
-          </div>
-        </div>
-      )}
       {rows.length === 0 ? (
         <div className="sheet" style={{ marginTop: 14 }}>
           <h2 className="st">No data loaded</h2>
@@ -748,7 +733,6 @@ function PlanScreen({ items, compute, econFor, horizon, portfolio, openSku }: {
       ) : (
         <div style={{ marginTop: 14 }}>
           <Sheet no="00" name="The plan" right={`${horizon}-mo season · ${rows.length} SKUs`}>
-            <p className="answer">One number per product: how many to make. Tap any product for the full story.</p>
             <div className="planrows">
               {rows.map((r) => {
                 const buffer = r.d.Qstar - r.d.QtoMean;
@@ -770,6 +754,17 @@ function PlanScreen({ items, compute, econFor, horizon, portfolio, openSku }: {
             <div className="actions">
               <button className="btn primary" onClick={exportCSV}><Download size={14} /> Export plan CSV</button>
             </div>
+            {showRoll && (
+              <details className="how">
+                <summary>Does this actually work?</summary>
+                <div className="howbody">
+                  We tested it on the past. Hide a season, plan for it, then check what really sold.
+                  Across <b>{portfolio.n}</b> hidden seasons, this planning beat &quot;just make the forecast&quot; on <b>{portfolio.wins} of {portfolio.n}</b>,
+                  keeping <b style={{ color: portfolio.savedVsMean < 0 ? "var(--red)" : "var(--good)" }}>{money(portfolio.savedVsMean)}</b> that
+                  would have been lost to markdowns and missed sales. It wins on average — not on every single product.
+                </div>
+              </details>
+            )}
           </Sheet>
           {rows.length > 1 && (
             <div style={{ marginTop: 14 }}>
@@ -789,6 +784,17 @@ function SkuScreen({ it, cm, items, econ, horizon, sizes, onEcon, onHorizon, onS
   score: (it: SkuItem, h: Holdout, econ: Econ) => { actual: number; scored: Record<string, ReturnType<typeof realizedCost>> };
 }) {
   const plan = decide(cm.fc.samples, econ);
+  const [open, setOpen] = useState<string | null>(null);
+  const hasDrivers = cm.fc.drivers.filter((d) => isFinite(d.coef)).length > 0;
+  const topics: { id: string; q: string; t: string; show?: boolean; body: () => React.ReactNode }[] = [
+    { id: "risk", q: "What if I cut more — or less?", t: "Drag the line. Play 60 seasons.", body: () => <RiskSheet key={"risk-" + it.id + ":" + horizon} samples={cm.fc.samples} plan={plan} /> },
+    { id: "sizes", q: "Which sizes?", t: "Split the cut into a size run.", body: () => <SizeSheet it={it} Qstar={plan.Qstar} weights={sizes} onWeights={onSizes} /> },
+    { id: "speed", q: "What is speed worth?", t: "Cut small, read sales, re-cut fast.", show: horizon >= 3, body: () => <QRSheet key={"qr-" + it.id + ":" + horizon} it={it} fc={cm.fc} econ={econ} /> },
+    { id: "econ", q: "My numbers are different", t: "Set your price, cost, and salvage.", body: () => <EconSheet it={it} econ={econ} horizon={horizon} onEcon={onEcon} onHorizon={onHorizon} /> },
+    { id: "trust", q: "Can I trust the forecast?", t: "Five models competed. See the scores.", body: () => <BrainSheet fc={cm.fc} /> },
+    { id: "drivers", q: "What moves demand?", t: "Price and promo effects, learned from history.", show: hasDrivers, body: () => <DriverSheet fc={cm.fc} /> },
+    { id: "proof", q: "Did it actually work?", t: "Tested against seasons it never saw.", body: () => <BacktestSheet it={it} cm={cm} econ={econ} horizon={horizon} score={score} /> },
+  ];
   return (
     <>
       <div className="skuchips" role="tablist" aria-label="Switch SKU">
@@ -805,13 +811,30 @@ function SkuScreen({ it, cm, items, econ, horizon, sizes, onEcon, onHorizon, onS
             <div><Seasonality it={it} /><div className="fp-cap">seasonality fingerprint · monthly index</div></div>
           </div>
         </Sheet>
-        <BrainSheet fc={cm.fc} />
-        {cm.fc.drivers.filter((d) => isFinite(d.coef)).length > 0 && <DriverSheet fc={cm.fc} />}
-        <EconSheet it={it} econ={econ} horizon={horizon} onEcon={onEcon} onHorizon={onHorizon} />
-        <RiskSheet key={"risk-" + it.id + ":" + horizon} samples={cm.fc.samples} plan={plan} />
-        <SizeSheet it={it} Qstar={plan.Qstar} weights={sizes} onWeights={onSizes} />
-        {horizon >= 3 && <QRSheet key={"qr-" + it.id + ":" + horizon} it={it} fc={cm.fc} econ={econ} />}
-        <BacktestSheet it={it} cm={cm} econ={econ} horizon={horizon} score={score} />
+        <div className="topics">
+          <div className="topics-cap">Dig deeper — tap a question</div>
+          {topics.filter((t) => t.show !== false).map((t) => {
+            const isOpen = open === t.id;
+            return (
+              <div key={t.id} className={"topic" + (isOpen ? " open" : "")}>
+                <button className="topic-head" aria-expanded={isOpen}
+                  onClick={() => { setOpen(isOpen ? null : t.id); vib(6); }}>
+                  <span className="tq">{t.q}<span className="tt">{t.t}</span></span>
+                  <span className="tic" aria-hidden="true"><Plus size={15} /></span>
+                </button>
+                <AnimatePresence initial={false}>
+                  {isOpen && (
+                    <motion.div className="topic-body" key="b"
+                      initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}
+                      transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}>
+                      {t.body()}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            );
+          })}
+        </div>
         <Drawer.Root>
           <Drawer.Trigger asChild>
             <button className="btn" style={{ alignSelf: "flex-start" }}><BookOpen size={14} /> Methodology &amp; what&apos;s real</button>
@@ -838,7 +861,7 @@ function DataScreen({ source, items, upload, onPick, onFile, onReset }: {
     <div className="screen">
       <section className="intro" style={{ padding: "4px 2px 4px" }}>
         <h1>Choose your <em>data</em></h1>
-        <p>The identical engine runs on all of it — sample catalog, genuine published series, or your own sales.</p>
+        <p>Same engine, your choice of data. Try a sample, or bring your own sales.</p>
       </section>
       <div className="datacards">
         <button className={"datacard" + (source === "apparel" ? " on" : "")} onClick={() => onPick("apparel")}>
