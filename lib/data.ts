@@ -1,11 +1,20 @@
 import { makeRng, type Econ } from "./engine";
 import type { Drivers } from "./forecast";
 
+export interface Bom {
+  fabric: string;          // primary material, named like a tech pack
+  ydsPerUnit: number;      // yards (or m² for filter media) per finished unit
+  sewMin: number;          // sewing/assembly minutes per unit
+  cutMin: number;          // cutting minutes per unit
+  leadWeeks: number;       // material lead time (Berry NYCO ~24-36wk; commercial ~6-10wk)
+  origin: string;          // where the material comes from
+}
 export interface SkuItem {
   id: string; nm: string; cat: string; labels: string[]; series: number[];
   econ: Econ; real: boolean; src: string; drivers?: Drivers;
   story?: string;          // one-line real-world grounding, shown in the SKU screen
   sizeW?: number[];        // default size-curve weights (e.g. a deliberately broken curve)
+  bom?: Bom;               // materials & labor spec — the factory side of the plan
 }
 
 /* ---- REAL public demand series (fetched verbatim; classic published datasets) ---- */
@@ -86,6 +95,7 @@ export function loadApparel(): SkuItem[] {
     id: a.id, nm: a.nm, cat: a.cat, labels: monthsFrom(START, N_MO), series: a.g.series,
     econ: { price: a.price, unitCost: a.unitCost, salvage: a.salvage }, real: false, src: "Illustrative sample data",
     drivers: { price: a.g.price, promo: a.g.promo },
+    bom: BOMS[a.id],
   }));
 }
 /* ---- GROUNDED catalogs: illustrative demand, but every SKU is modeled on a
@@ -144,12 +154,42 @@ const FILTRATION = [
     story: "Modeled on retail smoke masks: demand tracks the fire map — near zero in spring, sellouts each August–September as smoke events hit (Grand View Research)." },
 ];
 
+/* ---- tech-pack specs: material, consumption, labor, lead time ---- */
+const BOMS: Record<string, Bom> = {
+  "AN-FJ": { fabric: "10oz waxed cotton canvas", ydsPerUnit: 2.6, sewMin: 46, cutMin: 6, leadWeeks: 10, origin: "US-woven, Georgia" },
+  "AN-TEE": { fabric: "180gsm organic cotton jersey", ydsPerUnit: 1.1, sewMin: 8, cutMin: 2, leadWeeks: 8, origin: "Carolina circular knit" },
+  "AN-ML": { fabric: "18.5-micron merino jersey", ydsPerUnit: 1.3, sewMin: 14, cutMin: 3, leadWeeks: 14, origin: "AU merino, US-knit" },
+  "AN-LIN": { fabric: "5.5oz washed linen", ydsPerUnit: 1.8, sewMin: 22, cutMin: 4, leadWeeks: 12, origin: "EU flax, US cut & sew" },
+  "AN-SS": { fabric: "NYCO 50/50 ripstop + membrane", ydsPerUnit: 2.9, sewMin: 58, cutMin: 7, leadWeeks: 30, origin: "Berry-compliant NYCO" },
+  "AN-HD": { fabric: "12oz cotton fleece", ydsPerUnit: 1.9, sewMin: 18, cutMin: 4, leadWeeks: 9, origin: "US circular knit" },
+  "AN-PK": { fabric: "70D nylon + 700FP down", ydsPerUnit: 3.4, sewMin: 78, cutMin: 9, leadWeeks: 18, origin: "imported shell, US fill" },
+  "AN-SK": { fabric: "cushioned merino blend yarn", ydsPerUnit: 0.15, sewMin: 4, cutMin: 1, leadWeeks: 12, origin: "US sock knitter" },
+  "AN-DR": { fabric: "cotton poplin, garment-dyed", ydsPerUnit: 2.2, sewMin: 34, cutMin: 5, leadWeeks: 11, origin: "US-woven + dye house" },
+  "AN-CP": { fabric: "10oz waxed duck", ydsPerUnit: 0.5, sewMin: 12, cutMin: 2, leadWeeks: 10, origin: "US-woven, waxed in-house" },
+  "DL-IHW": { fabric: "NYCO 50/50 IHWCU twill", ydsPerUnit: 2.4, sewMin: 38, cutMin: 5, leadWeeks: 32, origin: "Berry fiber-to-fabric" },
+  "DL-SPK": { fabric: "1000D Cordura + laminate", ydsPerUnit: 3.1, sewMin: 95, cutMin: 8, leadWeeks: 26, origin: "Berry-compliant mill" },
+  "DL-FRB": { fabric: "FR modacrylic blend knit", ydsPerUnit: 1.4, sewMin: 16, cutMin: 3, leadWeeks: 24, origin: "certified FR spinner" },
+  "DL-AWC": { fabric: "3-layer laminated shell", ydsPerUnit: 2.8, sewMin: 52, cutMin: 6, leadWeeks: 28, origin: "Berry laminator" },
+  "DT-FSR": { fabric: "NYCO twill + FR panels", ydsPerUnit: 2.5, sewMin: 44, cutMin: 6, leadWeeks: 20, origin: "Berry NYCO" },
+  "DC-SCR": { fabric: "4-way stretch polyester", ydsPerUnit: 1.5, sewMin: 18, cutMin: 3, leadWeeks: 9, origin: "imported knit" },
+  "DC-WRA": { fabric: "merino French terry", ydsPerUnit: 1.7, sewMin: 20, cutMin: 4, leadWeeks: 16, origin: "traceable merino" },
+  "DC-ALN": { fabric: "nylon-lycra warp knit", ydsPerUnit: 1.4, sewMin: 22, cutMin: 3, leadWeeks: 12, origin: "technical knitter" },
+  "DC-BPD": { fabric: "11oz stretch denim", ydsPerUnit: 2.3, sewMin: 40, cutMin: 5, leadWeeks: 14, origin: "US denim mill" },
+  "FL-N95": { fabric: "meltblown PP + spunbond, m²", ydsPerUnit: 0.6, sewMin: 1.2, cutMin: 0.3, leadWeeks: 20, origin: "US meltblown line" },
+  "FL-SMS": { fabric: "SMS nonwoven, m²", ydsPerUnit: 0.4, sewMin: 0.5, cutMin: 0.2, leadWeeks: 12, origin: "US spunbond line" },
+  "FL-MRV": { fabric: "electret filter media, m²", ydsPerUnit: 1.6, sewMin: 2, cutMin: 0.5, leadWeeks: 10, origin: "US media plant" },
+  "FL-BAG": { fabric: "PPS needlefelt, m²", ydsPerUnit: 2.4, sewMin: 9, cutMin: 2, leadWeeks: 16, origin: "US needlepunch line" },
+  "FL-CBN": { fabric: "carbon-sphere laminate, m²", ydsPerUnit: 1.8, sewMin: 25, cutMin: 4, leadWeeks: 36, origin: "certified CBRN line" },
+  "FL-WLD": { fabric: "electrostatic nonwoven, m²", ydsPerUnit: 0.3, sewMin: 0.8, cutMin: 0.2, leadWeeks: 14, origin: "US converter" },
+};
+
 function toItems(list: typeof DEFENSE, src: string): SkuItem[] {
   return list.map((a) => ({
     id: a.id, nm: a.nm, cat: a.cat, labels: monthsFrom(START, N_MO), series: a.g.series,
     econ: { price: a.price, unitCost: a.unitCost, salvage: a.salvage }, real: false, src,
     drivers: { price: a.g.price, promo: a.g.promo },
     story: a.story, sizeW: (a as { sizeW?: number[] }).sizeW,
+    bom: BOMS[a.id],
   }));
 }
 export function loadDefense(): SkuItem[] { return toItems(DEFENSE, "Grounded sample · defense"); }

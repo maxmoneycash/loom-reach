@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { newsvendor, quantile, avg, expectedCost, realizedCost, riskAt, allocateSizes, makeRng, type Econ } from "@/lib/engine";
 import { runForecast, type ForecastResult } from "@/lib/forecast";
-import { loadApparel, loadReal, loadDefense, loadDtc, loadFiltration, parseCSV, type SkuItem } from "@/lib/data";
+import { loadApparel, loadReal, loadDefense, loadDtc, loadFiltration, parseCSV, type SkuItem, type Bom } from "@/lib/data";
 import { loadState, saveState, clearState } from "@/lib/persist";
 import { simulateQR, levelRatios } from "@/lib/quickresponse";
 import { allocateCapacity } from "@/lib/capacity";
@@ -265,12 +265,12 @@ function DecisionSheet({ it, plan, horizon, samples }: { it: SkuItem; plan: Deci
             {ratio >= 1
               ? <>a missed sale hurts <b>{isFinite(ratio) ? ratio.toFixed(1) + "×" : "far"} more</b> than an unsold unit.</>
               : <>an unsold unit hurts <b>{(1 / Math.max(ratio, 1e-9)).toFixed(1)}× more</b> than a missed sale.</>}
-            Expect to serve <span className="good">{Math.round(risk.fillRate * 100)}%</span> of demand and keep <span className="good">~{money(save)}</span> that a plain forecast would lose.
           </p>
           <div className="chips">
             <div className="chip fill"><div className="cv">{(risk.fillRate * 100).toFixed(1)}%</div><div className="ck">demand served</div></div>
             <div className="chip risk"><div className="cv">{(risk.pStockout * 100).toFixed(0)}%</div><div className="ck">chance you sell out</div></div>
             <div className="chip left"><div className="cv">{fmt(risk.expLeftover)}</div><div className="ck">typical leftover</div></div>
+            <div className="chip fill"><div className="cv">~{money(save)}</div><div className="ck">protected vs plain forecast</div></div>
           </div>
         </div>
         <RatioGauge cr={nv.criticalRatio} />
@@ -617,6 +617,87 @@ function BacktestSheet({ it, cm, econ, horizon, score }: { it: SkuItem; cm: Comp
   );
 }
 
+/* tech-pack spec strip: the SKU as a factory sees it */
+function SpecStrip({ bom }: { bom: Bom }) {
+  return (
+    <div className="spec" role="list" aria-label="Material and labor spec">
+      <div role="listitem"><div className="sk">material</div><div className="sv">{bom.fabric}</div></div>
+      <div role="listitem"><div className="sk">per unit</div><div className="sv">{bom.ydsPerUnit} <small>yd</small></div></div>
+      <div role="listitem"><div className="sk">sew</div><div className="sv">{bom.sewMin} <small>min</small></div></div>
+      <div role="listitem"><div className="sk">material lead</div><div className="sv">{bom.leadWeeks} <small>wk</small></div></div>
+      <div role="listitem"><div className="sk">source</div><div className="sv">{bom.origin}</div></div>
+    </div>
+  );
+}
+
+/* what the cut means on the factory floor — yards, hours, and the order-by date */
+const SEWERS = 24, CUTTERS = 4;
+function MakeSheet({ it, Qstar, horizon }: { it: SkuItem; Qstar: number; horizon: number }) {
+  const b = it.bom!;
+  const yards = Qstar * b.ydsPerUnit;
+  const sewH = (Qstar * b.sewMin) / 60, cutH = (Qstar * b.cutMin) / 60;
+  const sewWk = sewH / (8 * SEWERS * 5), cutWk = cutH / (8 * CUTTERS * 5);
+  const makeWk = Math.max(0.5, cutWk + sewWk);
+  const totalWk = b.leadWeeks + makeWk;
+  const leadPct = (b.leadWeeks / totalWk) * 100;
+  return (
+    <Sheet no="0B" name="What it takes to make" right={it.nm}>
+      <p className="answer">Cutting <b>{fmt(Qstar)} units</b> consumes:</p>
+      <div className="chips">
+        <div className="chip"><div className="cv">{fmt(yards)}</div><div className="ck">yd of {b.fabric.split(",")[0]}</div></div>
+        <div className="chip left"><div className="cv">{fmt(sewH)}</div><div className="ck">sewing hours</div></div>
+        <div className="chip left"><div className="cv">{fmt(cutH)}</div><div className="ck">cutting hours</div></div>
+        <div className="chip fill"><div className="cv">{makeWk < 1 ? "<1" : makeWk.toFixed(1)}</div><div className="ck">line-weeks @ {SEWERS} ops</div></div>
+      </div>
+      <div className="stagebar" aria-hidden="true" style={{ marginTop: 14 }}>
+        <i className="s1" style={{ width: leadPct.toFixed(0) + "%" }}>material · {b.leadWeeks}wk</i>
+        <i className="s2" style={{ flex: 1 }}>cut &amp; sew · {makeWk < 1 ? "<1" : makeWk.toFixed(1)}wk</i>
+      </div>
+      <div className="stagecap"><span>order fabric ~{Math.ceil(totalWk)} weeks before the season</span><span>{b.origin}</span></div>
+      <div className="mt">
+        The real deadline isn&apos;t the cut — it&apos;s the fabric. {b.leadWeeks >= 20
+          ? "Berry-compliant material runs " + b.leadWeeks + " weeks fiber-to-fabric, so this quantity is committed two quarters before the first sale."
+          : "At " + b.leadWeeks + " weeks of material lead, you commit this quantity about a quarter ahead."}
+        {" "}Season length: {horizon} months.
+      </div>
+    </Sheet>
+  );
+}
+
+/* plan-level rollup: what the whole season asks of the floor */
+function MaterialsSheet({ rows }: { rows: { it: SkuItem; q: number }[] }) {
+  const withBom = rows.filter((r) => r.it.bom);
+  if (withBom.length < 2) return null;
+  const byFabric = new Map<string, number>();
+  let sewH = 0;
+  withBom.forEach((r) => {
+    const b = r.it.bom!;
+    byFabric.set(b.fabric, (byFabric.get(b.fabric) ?? 0) + r.q * b.ydsPerUnit);
+    sewH += (r.q * b.sewMin) / 60;
+  });
+  const mats = [...byFabric.entries()].sort((a, b2) => b2[1] - a[1]).slice(0, 8);
+  const maxY = Math.max(...mats.map((m) => m[1]), 1);
+  const lineWeeks = sewH / (8 * SEWERS * 5);
+  return (
+    <Sheet no="0M" name="What the floor needs" right="materials & labor">
+      <div className="chips" style={{ marginTop: 2 }}>
+        <div className="chip"><div className="cv">{fmt(mats.reduce((a, m) => a + m[1], 0))}</div><div className="ck">total yards</div></div>
+        <div className="chip left"><div className="cv">{fmt(sewH)}</div><div className="ck">sewing hours</div></div>
+        <div className="chip fill"><div className="cv">{lineWeeks.toFixed(1)}</div><div className="ck">line-weeks @ {SEWERS} ops</div></div>
+      </div>
+      <div className="matrows">
+        {mats.map(([fab, yd]) => (
+          <div className="matrow" key={fab}>
+            <span className="mn">{fab.split(",")[0]}</span>
+            <div className="matbar"><i style={{ width: ((yd / maxY) * 100).toFixed(1) + "%" }} /></div>
+            <span className="mv">{fmt(yd)} yd</span>
+          </div>
+        ))}
+      </div>
+    </Sheet>
+  );
+}
+
 function MethodologyBody() {
   return (
     <>
@@ -771,6 +852,11 @@ function PlanScreen({ items, compute, econFor, horizon, portfolio, openSku }: {
               <CapacitySheet rows={rows.map((r) => ({ it: r.it, samples: compute.get(r.it.id)!.fc.samples, econ: econFor(r.it) }))} />
             </div>
           )}
+          {rows.length > 1 && (
+            <div style={{ marginTop: 14 }}>
+              <MaterialsSheet rows={rows.map((r) => ({ it: r.it, q: r.d.Qstar }))} />
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -787,6 +873,7 @@ function SkuScreen({ it, cm, items, econ, horizon, sizes, onEcon, onHorizon, onS
   const [open, setOpen] = useState<string | null>(null);
   const hasDrivers = cm.fc.drivers.filter((d) => isFinite(d.coef)).length > 0;
   const topics: { id: string; q: string; t: string; show?: boolean; body: () => React.ReactNode }[] = [
+    { id: "make", q: "What does it take to make?", t: "Fabric, labor, and when to order.", show: !!it.bom, body: () => <MakeSheet it={it} Qstar={plan.Qstar} horizon={horizon} /> },
     { id: "risk", q: "What if I cut more — or less?", t: "Drag the line. Play 60 seasons.", body: () => <RiskSheet key={"risk-" + it.id + ":" + horizon} samples={cm.fc.samples} plan={plan} /> },
     { id: "sizes", q: "Which sizes?", t: "Split the cut into a size run.", body: () => <SizeSheet it={it} Qstar={plan.Qstar} weights={sizes} onWeights={onSizes} /> },
     { id: "speed", q: "What is speed worth?", t: "Cut small, read sales, re-cut fast.", show: horizon >= 3, body: () => <QRSheet key={"qr-" + it.id + ":" + horizon} it={it} fc={cm.fc} econ={econ} /> },
@@ -802,7 +889,13 @@ function SkuScreen({ it, cm, items, econ, horizon, sizes, onEcon, onHorizon, onS
           <button key={s.id} role="tab" aria-selected={s.id === it.id} className={"skuchip" + (s.id === it.id ? " on" : "")} onClick={() => switchSku(s.id)}>{s.nm}</button>
         ))}
       </div>
-      {it.story && <p className="story"><span className="story-tag">grounded in</span> {it.story}</p>}
+      {it.story && (
+        <details className="story">
+          <summary><span className="story-tag">grounded in</span> a real, cited story<span className="more">read →</span></summary>
+          <div className="storybody">{it.story}</div>
+        </details>
+      )}
+      {it.bom && <SpecStrip bom={it.bom} />}
       <div className="sheets">
         <DecisionSheet it={it} plan={plan} horizon={horizon} samples={cm.fc.samples} />
         <Sheet no="02" name="What will sell" right={`${it.real ? "● real" : "○ illustrative"} · ${it.series.length}mo`}>

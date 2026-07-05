@@ -432,11 +432,33 @@ details.meth ul{margin:8px 0;padding-left:18px} details.meth li{margin:5px 0}
 .topic-body{padding:2px 0 18px}
 .topic-body .sheet{box-shadow:none;border-style:dashed}
 
-/* real-world grounding line on SKU screens */
-.story{display:block;font-size:12px;line-height:1.55;color:var(--muted);margin:2px 0 14px;
-  background:var(--surface-2);border:1px solid var(--line-2);border-radius:10px;padding:11px 13px;box-shadow:var(--sh-inset)}
+/* real-world grounding — collapsed to one tappable line */
+details.story{display:block;font-size:12px;line-height:1.55;color:var(--muted);margin:2px 0 12px;
+  background:var(--surface-2);border:1px solid var(--line-2);border-radius:10px;box-shadow:var(--sh-inset)}
+details.story summary{padding:10px 13px;cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;min-height:42px;
+  font-size:12px;color:var(--muted)}
+details.story summary::-webkit-details-marker{display:none}
+details.story summary .more{margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--signal-ink);white-space:nowrap}
+details.story[open] summary .more{display:none}
+details.story .storybody{padding:0 13px 12px}
 .story-tag{font-family:var(--mono);font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--signal-ink);
-  display:inline-block;margin-right:7px;border:1px solid color-mix(in oklch,var(--signal) 30%,white);border-radius:4px;padding:1px 6px;background:var(--signal-soft)}
+  display:inline-block;border:1px solid color-mix(in oklch,var(--signal) 30%,white);border-radius:4px;padding:1px 6px;background:var(--signal-soft);flex:0 0 auto}
+
+/* tech-pack spec strip — facts, not prose */
+.spec{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:1px;background:var(--line);
+  border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:0 0 14px;box-shadow:var(--sh-1)}
+.spec div{background:var(--surface);padding:9px 11px;min-width:0}
+.spec .sk{font-family:var(--mono);font-size:8.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--faint)}
+.spec .sv{font-size:12px;font-weight:600;color:var(--ink);margin-top:2px;line-height:1.3;overflow-wrap:anywhere}
+.spec .sv small{font-weight:400;color:var(--muted)}
+
+/* materials rollup bars */
+.matrows{display:flex;flex-direction:column;gap:9px;margin-top:10px}
+.matrow{display:grid;grid-template-columns:minmax(90px,150px) 1fr auto;gap:11px;align-items:center;font-size:12px}
+.matrow .mn{color:var(--ink);font-weight:500;line-height:1.25;overflow-wrap:anywhere}
+.matbar{height:16px;background:var(--surface-2);border:1px solid var(--line-2);border-radius:4px;overflow:hidden}
+.matbar>i{display:block;height:100%;background:var(--blue);opacity:.75}
+.matrow .mv{font-family:var(--mono);font-size:11px;white-space:nowrap;color:var(--muted)}
 
 /* SKU switcher chips on detail screen */
 .skuchips{display:flex;gap:7px;overflow-x:auto;padding:2px 2px 10px;scroll-snap-type:x proximity;
