@@ -41,7 +41,7 @@ export function monthsFrom(start: string, n: number): string[] {
    driver-regression model has genuine signal to find. ---- */
 interface Gen { series: number[]; price: number[]; promo: number[]; }
 function genSku(seed: number, n: number, base: number, trendPerYr: number, shape: number[], noise: number,
-  opts: { priceBase: number; promoLift?: number; elasticity?: number; intermittent?: boolean; noMarkdown?: boolean; stepAt?: number; stepMul?: number }): Gen {
+  opts: { priceBase: number; promoLift?: number; elasticity?: number; intermittent?: boolean; noMarkdown?: boolean; stepAt?: number; stepMul?: number; steps?: { at: number; mul: number }[] }): Gen {
   const rng = makeRng(seed);
   const promoLift = opts.promoLift ?? 0.5, elasticity = opts.elasticity ?? 1.1;
   const promoSet = new Set<number>();
@@ -52,7 +52,8 @@ function genSku(seed: number, n: number, base: number, trendPerYr: number, shape
     const pr = !opts.noMarkdown && mo === 7 ? opts.priceBase * 0.75 : opts.priceBase; // mid-year clearance markdown
     price.push(Math.round(pr));
     const isP = promoSet.has(i) ? 1 : 0; promo.push(isP);
-    const lvl = opts.stepAt != null && i >= opts.stepAt ? (opts.stepMul ?? 1) : 1;   // e.g. option-year plus-up or demand cliff
+    let lvl = opts.stepAt != null && i >= opts.stepAt ? (opts.stepMul ?? 1) : 1;   // e.g. option-year plus-up or demand cliff
+    if (opts.steps) for (const st of opts.steps) if (i >= st.at) lvl *= st.mul;    // multi-step: surge THEN cliff, etc.
     let v = base * s * tr * lvl * (1 + (rng() - 0.5) * noise) * (1 + promoLift * isP) * Math.pow(opts.priceBase / pr, elasticity);
     if (opts.intermittent && rng() > 0.28) v = 0; // sparse, lumpy demand (contract cadence)
     series.push(Math.max(0, Math.round(v)));
@@ -64,6 +65,7 @@ const SHAPES = {
   summer: [0.5, 0.55, 0.75, 1.05, 1.4, 1.65, 1.7, 1.55, 1.15, 0.8, 0.55, 0.45],
   steady: [0.95, 0.9, 1.0, 1.05, 1.05, 1.0, 0.9, 0.85, 1.05, 1.1, 1.15, 1.0],
   holiday: [0.7, 0.65, 0.75, 0.8, 0.85, 0.8, 0.8, 0.9, 1.05, 1.2, 1.7, 2.0],
+  smoke: [0.8, 0.75, 0.8, 0.85, 0.9, 1.0, 1.2, 1.55, 1.7, 1.25, 0.95, 0.85], // western wildfire season peaks Aug–Sep
 };
 const N_MO = 48, START = "2021-01";
 const APPAREL = [
@@ -121,6 +123,27 @@ const DTC = [
     story: "Modeled on Old Navy's 2022 BODEQUALITY rollout: extended sizes over-bought while core sizes stocked out — merch margin fell ~5pts (SEC Q2 2022). The size curve below starts flat, like theirs did. Fix it." },
 ];
 
+const FILTRATION = [
+  { id: "FL-N95", nm: "N95 Respirator (meltblown)", cat: "Surge → cliff · cases of 100", price: 95, unitCost: 68, salvage: 6,
+    g: genSku(411, N_MO, 4000, 0, SHAPES.steady, 0.22, { priceBase: 95, promoLift: 0, elasticity: 0, noMarkdown: true, steps: [{ at: 10, mul: 4.2 }, { at: 26, mul: 0.08 }] }),
+    story: "Modeled on DemeTech (Miami), 2020–22: scaled to 1,500 workers making up to 5M masks a day, then laid off nearly all of them with 20M+ unsold N95s when buyers returned to ~$0.30 imports (WLRN)." },
+  { id: "FL-SMS", nm: "Surgical Mask (SMS nonwoven)", cat: "Steady · import pressure", price: 28, unitCost: 21, salvage: 2,
+    g: genSku(422, N_MO, 9000, -0.08, SHAPES.steady, 0.12, { priceBase: 28, promoLift: 0, elasticity: 0, noMarkdown: true }),
+    story: "Modeled on the 2021 US mask glut: AMMA members sat on 260M unsold masks against $0.26–0.50 imports. The Make PPE in America Act now mandates 2-year domestic contracts (Congress.gov, Al Jazeera)." },
+  { id: "FL-MRV", nm: "MERV-13 HVAC Filter Media", cat: "Growth + smoke season", price: 18, unitCost: 9, salvage: 4,
+    g: genSku(433, N_MO, 5200, 0.12, SHAPES.smoke, 0.2, { priceBase: 18, promoLift: 0.3, elasticity: 1.1 }),
+    story: "Modeled on the post-COVID MERV-13 shift plus wildfire season: demand steps up every smoke season, and the US purifier market is growing ~7%/yr on PM2.5 awareness (Grand View Research)." },
+  { id: "FL-BAG", nm: "Baghouse Filter Bags (needlefelt)", cat: "Replacement cycle · batchy", price: 42, unitCost: 24, salvage: 5,
+    g: genSku(444, N_MO, 950, 0.04, SHAPES.steady, 0.38, { priceBase: 42, promoLift: 0, elasticity: 0, noMarkdown: true }),
+    story: "Modeled on baghouse consumables: bags last 1–3 years (aramid/PPS up to 5) with ~10–15% replaced yearly — 100,000+ bags installed globally per year (Baghouse America)." },
+  { id: "FL-CBN", nm: "CBRN Adsorptive Fabric", cat: "Defense · episodic", price: 310, unitCost: 205, salvage: 40,
+    g: genSku(455, N_MO, 2600, 0.06, SHAPES.steady, 0.3, { priceBase: 310, promoLift: 0, elasticity: 0, noMarkdown: true, intermittent: true }),
+    story: "Modeled on JSLIST/UIPE carbon-sphere liners: JPEO-CBRND buys on ~$500M IDIQs (1 base + 4 option years) and nothing ships without recertification — no substitutes (Army.mil, Safeware)." },
+  { id: "FL-WLD", nm: "Smoke Mask (retail 10-pack)", cat: "Wildfire spikes · volatile", price: 12, unitCost: 5, salvage: 1,
+    g: genSku(466, N_MO, 2200, 0.1, SHAPES.smoke, 0.4, { priceBase: 12, promoLift: 0.6, elasticity: 1.4 }),
+    story: "Modeled on retail smoke masks: demand tracks the fire map — near zero in spring, sellouts each August–September as smoke events hit (Grand View Research)." },
+];
+
 function toItems(list: typeof DEFENSE, src: string): SkuItem[] {
   return list.map((a) => ({
     id: a.id, nm: a.nm, cat: a.cat, labels: monthsFrom(START, N_MO), series: a.g.series,
@@ -131,6 +154,7 @@ function toItems(list: typeof DEFENSE, src: string): SkuItem[] {
 }
 export function loadDefense(): SkuItem[] { return toItems(DEFENSE, "Grounded sample · defense"); }
 export function loadDtc(): SkuItem[] { return toItems(DTC, "Grounded sample · DTC"); }
+export function loadFiltration(): SkuItem[] { return toItems(FILTRATION, "Grounded sample · filtration"); }
 
 export function loadReal(): SkuItem[] {
   return Object.keys(REAL).map((k) => { const d = REAL[k]; return { id: k, nm: d.name, cat: d.cite, labels: monthsFrom(d.start, d.vals.length), series: d.vals.slice(), econ: { ...REAL_ECON[k] }, real: true, src: "Real public dataset" }; });

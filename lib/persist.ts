@@ -6,7 +6,7 @@ import type { SkuItem } from "./data";
 const KEY = "loom-reach-v1";
 
 export interface Persisted {
-  source: "apparel" | "real" | "upload" | "defense" | "dtc";
+  source: "apparel" | "real" | "upload" | "defense" | "dtc" | "filtration";
   horizon: number;
   econOverride: Record<string, Econ>;
   uploaded: SkuItem[] | null;

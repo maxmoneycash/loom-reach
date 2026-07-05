@@ -29,3 +29,12 @@
 3. **SOCOM pack surge** — near-zero baseline + 5–10k surges via ADS TLS, 20–35% margin (lumpy/Croston).
 4. **FR layering** — DRIFIRE-style, no-substitution certification → stockout-only failure mode.
 5. **DTC contrast pair** — FIGS/Allbirds-style glut regime vs Lululemon-style sellout regime; Nike/Gap numbers as in-copy citations.
+
+## Filtration & PPE textiles (added Jul 5)
+- **Meltblown 2020**: China price <20k → >400k yuan/ton (~20×) by Mar 2020; global meltblown market $809M → ~$1.6B in 2020 (Smithers); line = ~$5M machine + ~1yr lead (PBS FRONTLINE); DPA awards Apr–May 2020 ~$134.5M (3M/O&M/Honeywell/H&V).
+- **The cliff**: DemeTech scaled to 1,500 workers / 5M masks/day → laid off ~1,500, 20–30M unsold N95s (WLRN); AMMA members sat on 260M unsold masks vs $0.26–0.50 imports (Al Jazeera).
+- **Stockpile**: SNS had ~13M N95s at onset (WaPo); 300M shelf goal, 500M-mask order over 18 months (NPR); **Make PPE in America Act (IIJA 2021)**: domestic content + 2-year minimum contracts (S.1306).
+- **HVAC/MERV-13**: NA filter media ~1.69B→2.64B m² by 2032; US purifier market $4.7B→$7.9B 2025–33, wildfire-driven (Grand View⚠).
+- **Baghouse**: bag life 1–3yr (up to 5 aramid/PPS), ~10–15%/yr replaced; market $3.86B→$6.95B (⚠ market-research).
+- **CBRN**: JSLIST carbon-sphere liner → UIPE (ACAT I); JPEO-CBRND IDIQ ~$500M, 1+4 years, certification-gated.
+- Flags: meltblown $/ton = China figures; per-mask domestic cost gap unverified (NPR timeout); wildfire per-event unit spikes directional only.

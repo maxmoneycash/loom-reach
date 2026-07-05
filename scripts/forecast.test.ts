@@ -1,7 +1,7 @@
 /* Headless validation of the forecasting brain. Run: npx tsx scripts/forecast.test.ts */
 import { runForecast, classifyDemand, type Drivers } from "../lib/forecast";
 import { makeRng, quantile, newsvendor, riskAt, allocateSizes } from "../lib/engine";
-import { REAL, loadApparel, loadDefense, loadDtc, parseCSV } from "../lib/data";
+import { REAL, loadApparel, loadDefense, loadDtc, loadFiltration, parseCSV } from "../lib/data";
 
 let pass = 0, fail = 0;
 const ok = (name: string, cond: boolean, extra = "") => { if (cond) pass++; else fail++; console.log((cond ? "PASS " : "FAIL ") + name + (extra ? "  " + extra : "")); };
@@ -218,6 +218,19 @@ const scr = dtc2.find((d) => d.id === "DC-SCR")!;
 const scrEarly = scr.series.slice(12, 20).reduce((a, b) => a + b, 0) / 8, scrLate = scr.series.slice(22, 30).reduce((a, b) => a + b, 0) / 8;
 ok("dtc: scrub top shows the demand cliff", scrLate < scrEarly * 0.85, (scrLate / scrEarly).toFixed(2) + "×");
 ok("dtc: Old Navy-style SKU carries a flat default size curve", (dtc2.find((d) => d.id === "DC-BPD")!.sizeW ?? [])[0] === 14);
+
+/* ---- 15. filtration catalog ---- */
+const flt = loadFiltration();
+ok("filtration: 6 SKUs with stories", flt.length === 6 && flt.every((f) => !!f.story), flt.map((f) => f.id).join(","));
+const n95 = flt.find((f) => f.id === "FL-N95")!;
+const preSurge = avg2(n95.series.slice(0, 10)), surge = avg2(n95.series.slice(12, 24)), cliff = avg2(n95.series.slice(28));
+ok("filtration: N95 surge (>3×) then cliff (<40% of pre)", surge > preSurge * 3 && cliff < preSurge * 0.4,
+   `pre=${Math.round(preSurge)} surge=${Math.round(surge)} cliff=${Math.round(cliff)}`);
+const mrv = flt.find((f) => f.id === "FL-MRV")!;
+const smokeIdx = (() => { const sums = Array(12).fill(0); mrv.series.forEach((v, i) => { sums[i % 12] += v; }); return sums; })();
+ok("filtration: MERV media peaks in wildfire season (Aug/Sep)", Math.max(smokeIdx[7], smokeIdx[8]) === Math.max(...smokeIdx));
+ok("filtration: CBRN fabric is intermittent/lumpy", ["intermittent", "lumpy"].includes(classifyDemand(flt.find((f) => f.id === "FL-CBN")!.series).label));
+function avg2(a: number[]) { return a.reduce((x, y) => x + y, 0) / Math.max(a.length, 1); }
 
 console.log("\n--- champagne leaderboard (by MASE) ---");
 rc.candidates.forEach((c) => console.log(`  ${c.key.padEnd(8)} MASE ${c.mase.toFixed(3)}  WAPE ${(c.wape * 100).toFixed(1)}%  bias ${(c.bias * 100).toFixed(1)}%`));

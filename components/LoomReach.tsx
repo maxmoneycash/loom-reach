@@ -6,17 +6,17 @@ import NumberFlow from "@number-flow/react";
 import { Drawer } from "vaul";
 import {
   Upload, TriangleAlert, Download, RotateCcw, ChevronLeft,
-  ClipboardList, Database, BookOpen, Layers, ShoppingBag, ArrowUpRight, Shield, Shirt, Plus,
+  ClipboardList, Database, BookOpen, Layers, ShoppingBag, ArrowUpRight, Shield, Shirt, Plus, Wind,
 } from "lucide-react";
 import { newsvendor, quantile, avg, expectedCost, realizedCost, riskAt, allocateSizes, makeRng, type Econ } from "@/lib/engine";
 import { runForecast, type ForecastResult } from "@/lib/forecast";
-import { loadApparel, loadReal, loadDefense, loadDtc, parseCSV, type SkuItem } from "@/lib/data";
+import { loadApparel, loadReal, loadDefense, loadDtc, loadFiltration, parseCSV, type SkuItem } from "@/lib/data";
 import { loadState, saveState, clearState } from "@/lib/persist";
 import { simulateQR, levelRatios } from "@/lib/quickresponse";
 import { allocateCapacity } from "@/lib/capacity";
 
 const M = 12;
-type Source = "apparel" | "real" | "upload" | "defense" | "dtc";
+type Source = "apparel" | "real" | "upload" | "defense" | "dtc" | "filtration";
 type Tab = "plan" | "data" | "method";
 interface View { tab: Tab; sku: string | null; }
 
@@ -855,7 +855,7 @@ function SkuScreen({ it, cm, items, econ, horizon, sizes, onEcon, onHorizon, onS
 
 function DataScreen({ source, items, upload, onPick, onFile, onReset }: {
   source: Source; items: SkuItem[]; upload: { error: string | null; warnings: string[]; okay: string | null };
-  onPick: (kind: "apparel" | "real" | "shopify" | "defense" | "dtc") => void; onFile: (e: React.ChangeEvent<HTMLInputElement>) => void; onReset: () => void;
+  onPick: (kind: "apparel" | "real" | "shopify" | "defense" | "dtc" | "filtration") => void; onFile: (e: React.ChangeEvent<HTMLInputElement>) => void; onReset: () => void;
 }) {
   return (
     <div className="screen">
@@ -878,6 +878,11 @@ function DataScreen({ source, items, upload, onPick, onFile, onReset }: {
           <span className="ic"><Shirt size={17} /></span>
           <span><span className="dn">DTC brand stories</span><span className="dd" style={{ display: "block" }}>4 SKUs modeled on documented gluts &amp; sellouts — the FIGS cliff, Allbirds&apos; miss, the Old Navy size-curve failure.</span></span>
           <span className="go">{source === "dtc" && items.length ? "active" : "load →"}</span>
+        </button>
+        <button className={"datacard" + (source === "filtration" ? " on" : "")} onClick={() => onPick("filtration")}>
+          <span className="ic"><Wind size={17} /></span>
+          <span><span className="dn">Filtration &amp; PPE textiles</span><span className="dd" style={{ display: "block" }}>6 all-fabric filter SKUs — the N95 surge-and-cliff, wildfire smoke spikes, baghouse replacement cycles.</span></span>
+          <span className="go">{source === "filtration" && items.length ? "active" : "load →"}</span>
         </button>
         <button className={"datacard" + (source === "real" ? " on" : "")} onClick={() => onPick("real")}>
           <span className="ic"><Database size={17} /></span>
@@ -977,6 +982,7 @@ export default function LoomReach() {
       } else if (p.source === "real") { setSource("real"); setItems(loadReal()); }
       else if (p.source === "defense") { setSource("defense"); setItems(loadDefense()); }
       else if (p.source === "dtc") { setSource("dtc"); setItems(loadDtc()); }
+      else if (p.source === "filtration") { setSource("filtration"); setItems(loadFiltration()); }
       if (p.econOverride) setEconOverride(p.econOverride);
       if (p.sizes) setSizes(p.sizes);
       if (p.horizon >= 1 && p.horizon <= 24) setHorizon(p.horizon);
@@ -1048,7 +1054,7 @@ export default function LoomReach() {
   function switchSource(s: Source) {
     setSource(s); setEconOverride({}); setHorizon(12);
     setUpload({ error: null, warnings: [], okay: null });
-    setItems(s === "apparel" ? loadApparel() : s === "real" ? loadReal() : s === "defense" ? loadDefense() : s === "dtc" ? loadDtc() : []);
+    setItems(s === "apparel" ? loadApparel() : s === "real" ? loadReal() : s === "defense" ? loadDefense() : s === "dtc" ? loadDtc() : s === "filtration" ? loadFiltration() : []);
   }
   function applyIngest(items2: SkuItem[], warnings: string[], src: string) {
     const longest = Math.max(...items2.map((i) => i.series.length));
@@ -1065,7 +1071,7 @@ export default function LoomReach() {
       applyIngest(data.items, data.warnings, srcLabel);
     } catch (err) { setUpload({ error: "Ingestion failed: " + (err as Error).message, warnings: [], okay: null }); }
   }
-  function onPickData(kind: "apparel" | "real" | "shopify" | "defense" | "dtc") {
+  function onPickData(kind: "apparel" | "real" | "shopify" | "defense" | "dtc" | "filtration") {
     vib(6);
     if (kind === "shopify") {
       void (async () => {
